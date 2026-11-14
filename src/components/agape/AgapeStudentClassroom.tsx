@@ -22,6 +22,10 @@ import {
   Presentation,
   Film,
   X,
+  ExternalLink,
+  Clock,
+  GraduationCap,
+  Link as LinkIcon,
 } from 'lucide-react';
 import {
   Course,
@@ -35,6 +39,7 @@ import { VideoPlayer } from '../common/VideoPlayer';
 import { DocumentPreviewModal } from '../common/DocumentPreviewModal';
 import { AgapeSimulatorPlayer } from './AgapeSimulatorPlayer';
 import { AgapeStudentTutorPanel } from './AgapeStudentTutorPanel';
+import { compressImageFileToDataUrl } from '../../utils/imageUtils';
 
 interface AgapeStudentClassroomProps {
   course: Course;
@@ -45,12 +50,14 @@ export const AgapeStudentClassroom: React.FC<AgapeStudentClassroomProps> = ({ co
     currentAuthUser,
     progress,
     isLessonCompleted,
-    toggleLessonCompleted,
+    getLessonRequirementStatus,
+    markLessonVideoWatched,
     getCourseProgressPercent,
     getModuleProgress,
     generateStudentExerciseAI,
     evaluateStudentAnswerAI,
     submitAssignmentWork,
+    requestCertificate,
     openCertificate,
     recordSimulatorScore,
   } = useLms();
@@ -109,6 +116,10 @@ export const AgapeStudentClassroom: React.FC<AgapeStudentClassroomProps> = ({ co
   const courseProgress = progress[progressKey];
   const courseProgressPercent = getCourseProgressPercent(course.id);
   const isCompleted = activeLesson ? isLessonCompleted(course.id, activeLesson.id) : false;
+  const activeReqStatus = activeLesson
+    ? getLessonRequirementStatus(course.id, activeLesson.id)
+    : null;
+  const certRequest = courseProgress?.certificateRequest;
 
   // Simulator is visible ONLY if configured and explicitly enabled by Administrator
   const isSimulatorVisible = Boolean(
@@ -158,11 +169,6 @@ export const AgapeStudentClassroom: React.FC<AgapeStudentClassroomProps> = ({ co
         currentExercise.explanation
       );
       setEvaluationResult(result);
-
-      // Auto-complete lesson if exercise scored well
-      if (result.score >= 70 && !isCompleted && activeLesson) {
-        toggleLessonCompleted(course.id, activeLesson.id);
-      }
     } finally {
       setIsEvaluating(false);
     }
@@ -249,14 +255,49 @@ export const AgapeStudentClassroom: React.FC<AgapeStudentClassroomProps> = ({ co
             </div>
 
             {courseProgressPercent === 100 && (
-              <button
-                type="button"
-                onClick={() => openCertificate(course)}
-                className="px-3 py-1.5 bg-[#F2C94C] text-[#3B2C73] font-bold text-xs rounded-lg shadow-xs flex items-center gap-1.5 hover:bg-amber-300 transition-colors cursor-pointer"
-              >
-                <Award className="w-4 h-4" />
-                <span>Ver Certificado</span>
-              </button>
+              <>
+                {certRequest?.status === 'approved' ? (
+                  <button
+                    type="button"
+                    onClick={() => openCertificate(course)}
+                    className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>⬇️ Descargar Certificado</span>
+                  </button>
+                ) : certRequest?.status === 'pending' ? (
+                  <div className="px-3 py-1.5 bg-amber-50 border border-amber-200 text-amber-900 font-bold text-xs rounded-lg flex items-center gap-1.5">
+                    <Clock className="w-4 h-4 text-amber-600" />
+                    <span>Solicitud Enviada (En Revisión)</span>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-end gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        requestCertificate(course.id);
+                        setDownloadNotice(
+                          '¡Solicitud de certificado enviada al Administrador para verificación de notas!'
+                        );
+                        setTimeout(() => setDownloadNotice(null), 4000);
+                      }}
+                      className="px-3.5 py-2 bg-[#F2C94C] text-[#3B2C73] font-bold text-xs rounded-lg shadow-xs flex items-center gap-1.5 hover:bg-amber-300 transition-colors cursor-pointer"
+                    >
+                      <GraduationCap className="w-4 h-4" />
+                      <span>
+                        {certRequest?.status === 'rejected'
+                          ? '🎓 Volver a Solicitar Certificado'
+                          : '🎓 Solicitar Certificado'}
+                      </span>
+                    </button>
+                    {certRequest?.status === 'rejected' && certRequest.rejectionNote && (
+                      <span className="text-[10px] text-rose-700 font-semibold max-w-[220px] text-right">
+                        Observación: {certRequest.rejectionNote}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -277,79 +318,115 @@ export const AgapeStudentClassroom: React.FC<AgapeStudentClassroomProps> = ({ co
                   }
                   title={activeLesson?.title || 'Video de la Clase'}
                   onEnded={() => {
-                    if (activeLesson && !isCompleted) {
-                      toggleLessonCompleted(course.id, activeLesson.id);
+                    if (activeLesson) {
+                      markLessonVideoWatched(course.id, activeLesson.id);
+                      setDownloadNotice(
+                        'Video reproducido hasta el final. Avance registrado automáticamente.'
+                      );
+                      setTimeout(() => setDownloadNotice(null), 3500);
                     }
                   }}
                 />
               </div>
             </div>
 
-            {/* Lesson Title & Video Metadata */}
-            <div className="p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2 text-xs text-[#4B3B8B] font-semibold flex-wrap">
-                  <Layers className="w-3.5 h-3.5 text-[#6080B8]" />
-                  <span>{activeModule?.title || 'Módulo'}</span>
-                  <ChevronRight className="w-3 h-3 text-slate-400" />
-                  <span className="font-mono text-slate-500">
-                    {activeLesson?.durationMinutes || 18} min
+            {/* Lesson Title & Automatic Progress Requirements */}
+            <div className="p-5 border-b border-slate-200 flex flex-col gap-3 bg-white">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-xs text-[#4B3B8B] font-semibold flex-wrap">
+                    <Layers className="w-3.5 h-3.5 text-[#6080B8]" />
+                    <span>{activeModule?.title || 'Módulo'}</span>
+                    <ChevronRight className="w-3 h-3 text-slate-400" />
+                    <span className="font-mono text-slate-500">
+                      {activeLesson?.durationMinutes || 18} min
+                    </span>
+                    {activeLesson?.videoFileName && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#F4F6F9] border border-slate-200 text-[10px] font-mono text-slate-600">
+                        <Film className="w-3 h-3 text-[#4B3B8B]" />
+                        <span className="truncate max-w-[180px]">{activeLesson.videoFileName}</span>
+                        {activeLesson.videoFileSize && (
+                          <strong className="text-[#4B3B8B]">({activeLesson.videoFileSize})</strong>
+                        )}
+                      </span>
+                    )}
+                  </div>
+                  <h2 className="text-lg font-bold text-slate-900 tracking-tight">
+                    {activeLesson?.title || 'Lección'}
+                  </h2>
+                </div>
+
+                <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={handleGenerateAIExercise}
+                    disabled={isGeneratingExercise}
+                    className="px-3.5 py-2 bg-gradient-to-r from-[#4B3B8B] to-[#6080B8] hover:opacity-95 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-2 transition-all cursor-pointer"
+                  >
+                    <Sparkles className={`w-4 h-4 text-[#F2C94C] ${isGeneratingExercise ? 'animate-spin' : ''}`} />
+                    <span>{isGeneratingExercise ? 'Generando con IA...' : '✨ Generar Caso Práctico (IA)'}</span>
+                  </button>
+
+                  <span
+                    className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 border ${
+                      isCompleted
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                        : 'bg-[#FAFBFD] border-slate-200 text-slate-600'
+                    }`}
+                  >
+                    <CheckCircle
+                      className={`w-4 h-4 ${isCompleted ? 'text-emerald-600' : 'text-slate-400'}`}
+                    />
+                    <span>{isCompleted ? 'Lección Completada ✓' : 'Avance Automático'}</span>
                   </span>
-                  {activeLesson?.videoFileName && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#F4F6F9] border border-slate-200 text-[10px] font-mono text-slate-600">
-                      <Film className="w-3 h-3 text-[#4B3B8B]" />
-                      <span className="truncate max-w-[180px]">{activeLesson.videoFileName}</span>
-                      {activeLesson.videoFileSize && (
-                        <strong className="text-[#4B3B8B]">({activeLesson.videoFileSize})</strong>
-                      )}
+                </div>
+              </div>
+
+              {/* Automatic Completion Checklist */}
+              {activeReqStatus && (
+                <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
+                  <span className="text-slate-500 font-semibold mr-1">Requisitos para completar:</span>
+                  {activeReqStatus.hasVideo && (
+                    <span
+                      className={`px-2.5 py-0.5 rounded-md font-semibold border ${
+                        activeReqStatus.videoWatched
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          : 'bg-slate-50 border-slate-200 text-slate-600'
+                      }`}
+                    >
+                      {activeReqStatus.videoWatched ? '✓ Video visto al final' : '○ Ver video hasta el final'}
                     </span>
                   )}
+                  {activeReqStatus.hasAssignment && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('assignment')}
+                      className={`px-2.5 py-0.5 rounded-md font-semibold border cursor-pointer ${
+                        activeReqStatus.assignmentDone
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          : 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100'
+                      }`}
+                    >
+                      {activeReqStatus.assignmentDone ? '✓ Tarea entregada' : '○ Entregar tarea práctica'}
+                    </button>
+                  )}
+                  {activeReqStatus.hasActiveSimulator && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('simulator')}
+                      className={`px-2.5 py-0.5 rounded-md font-semibold border cursor-pointer ${
+                        activeReqStatus.simulatorDone
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          : 'bg-purple-50 border-purple-200 text-[#4B3B8B] hover:bg-purple-100'
+                      }`}
+                    >
+                      {activeReqStatus.simulatorDone
+                        ? '✓ Simulador aprobado'
+                        : '○ Aprobar simulador práctico'}
+                    </button>
+                  )}
                 </div>
-                <h2 className="text-lg font-bold text-slate-900 tracking-tight">
-                  {activeLesson?.title || 'Lección'}
-                </h2>
-              </div>
-
-              <div className="flex items-center gap-2.5 shrink-0">
-                <button
-                  type="button"
-                  onClick={handleGenerateAIExercise}
-                  disabled={isGeneratingExercise}
-                  className="px-3.5 py-2 bg-gradient-to-r from-[#4B3B8B] to-[#6080B8] hover:opacity-95 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-2 transition-all cursor-pointer"
-                >
-                  <Sparkles className={`w-4 h-4 text-[#F2C94C] ${isGeneratingExercise ? 'animate-spin' : ''}`} />
-                  <span>{isGeneratingExercise ? 'Generando con IA...' : '✨ Generar Caso Práctico (IA)'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (activeLesson) {
-                      toggleLessonCompleted(course.id, activeLesson.id);
-                      const isNowDone = !isCompleted;
-                      const allLessons = course.modules.flatMap((m) => m.lessons);
-                      const completedCount = (courseProgress?.completedLessonIds || []).filter(
-                        (id) => allLessons.some((l) => l.id === id)
-                      ).length + (isNowDone ? 1 : -1);
-                      const nextPercent = Math.max(0, Math.min(100, Math.round((completedCount / (allLessons.length || 1)) * 100)));
-                      setDownloadNotice(
-                        isNowDone
-                          ? `¡Excelente avance! Lección completada (${nextPercent}% del curso).`
-                          : `Lección desmarcada (${nextPercent}% del curso).`
-                      );
-                      setTimeout(() => setDownloadNotice(null), 3500);
-                    }
-                  }}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-                    isCompleted
-                      ? 'bg-emerald-600 text-white shadow-xs'
-                      : 'bg-[#FCF9EF] border border-[#EDE7D3] text-[#4B3B8B] hover:bg-[#F3EBFD]'
-                  }`}
-                >
-                  <CheckCircle className={`w-4 h-4 ${isCompleted ? 'text-white' : 'text-[#4B3B8B]'}`} />
-                  <span>{isCompleted ? 'Completada ✓' : 'Marcar como Completada'}</span>
-                </button>
-              </div>
+              )}
             </div>
 
             {/* Content Tabs Navigation */}
@@ -758,132 +835,222 @@ export const AgapeStudentClassroom: React.FC<AgapeStudentClassroomProps> = ({ co
 
               {/* Tab Body: Tarea Práctica */}
               {activeTab === 'assignment' && activeLesson?.assignment && (() => {
-                const existingSubmission = courseProgress?.assignmentSubmissions?.[activeLesson.assignment.id];
+                const assignment = activeLesson.assignment;
+                const existingSubmission = courseProgress?.assignmentSubmissions?.[assignment.id];
+                const deliveryType = assignment.deliveryType || 'both';
+                const allowFile = deliveryType === 'file' || deliveryType === 'both';
+                const allowLink = deliveryType === 'link' || deliveryType === 'both';
+
+                const handleAssignmentFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (!file) return;
+                  const sizeStr =
+                    file.size > 1048576
+                      ? `${(file.size / 1048576).toFixed(1)} MB`
+                      : `${Math.max(1, Math.round(file.size / 1024))} KB`;
+
+                  let fileData: string | undefined;
+                  try {
+                    if (file.type.startsWith('image/')) {
+                      fileData = await compressImageFileToDataUrl(file, 1024, 0.8);
+                    } else if (file.size <= 2 * 1024 * 1024) {
+                      fileData = await new Promise<string>((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve(String(reader.result || ''));
+                        reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
+                        reader.readAsDataURL(file);
+                      });
+                    }
+                  } catch {
+                    fileData = undefined;
+                  }
+
+                  submitAssignmentWork(
+                    course.id,
+                    assignment.id,
+                    file.name,
+                    assignmentNotesInput.trim() || 'Reporte técnico entregado desde el Aula Virtual.',
+                    sizeStr,
+                    undefined,
+                    undefined,
+                    fileData
+                  );
+                  setDownloadNotice(`Entrega "${file.name}" registrada correctamente.`);
+                  setTimeout(() => setDownloadNotice(null), 3500);
+                };
 
                 return (
                   <div className="space-y-4">
                     <input
                       ref={assignmentFileInputRef}
                       type="file"
-                      accept=".pdf,.doc,.docx,.zip,.png,.jpg,.jpeg"
+                      accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.png,.jpg,.jpeg,.txt"
                       className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (!file || !activeLesson.assignment) return;
-                        const sizeStr =
-                          file.size > 1048576
-                            ? `${(file.size / 1048576).toFixed(1)} MB`
-                            : `${Math.max(1, Math.round(file.size / 1024))} KB`;
-                        submitAssignmentWork(
-                          course.id,
-                          activeLesson.assignment.id,
-                          file.name,
-                          assignmentNotesInput.trim() || 'Reporte técnico entregado desde el Aula Virtual.',
-                          sizeStr
-                        );
-                        setDownloadNotice(`Entrega "${file.name}" registrada correctamente.`);
-                        setTimeout(() => setDownloadNotice(null), 3500);
-                        e.target.value = '';
-                      }}
+                      onChange={handleAssignmentFileChange}
                     />
 
-                    <h4 className="text-sm font-bold text-slate-900">
-                      {activeLesson.assignment.title}
-                    </h4>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h4 className="text-sm font-bold text-slate-900">{assignment.title}</h4>
+                      <div className="flex items-center gap-2 text-[11px] font-mono">
+                        {assignment.dueDate && (
+                          <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700">
+                            Fecha límite: {assignment.dueDate}
+                          </span>
+                        )}
+                        <span className="px-2 py-0.5 rounded bg-[#4B3B8B]/10 text-[#4B3B8B] font-bold">
+                          Ponderación: {assignment.maxPoints || 100} pts
+                        </span>
+                      </div>
+                    </div>
+
                     <div className="p-5 bg-white border border-slate-200 rounded-xl space-y-3">
                       <div className="text-xs font-bold text-[#4B3B8B]">
                         Instrucciones de la Asignación:
                       </div>
                       <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">
-                        {activeLesson.assignment.description}
+                        {assignment.instructions || assignment.description}
                       </p>
                     </div>
 
                     {existingSubmission && (
-                      <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between gap-3 text-xs">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <FileCheck className="w-5 h-5 text-emerald-600 shrink-0" />
-                          <div className="min-w-0">
-                            <div className="font-bold text-emerald-900 truncate">
-                              Evidencia entregada: {existingSubmission.fileName}
-                            </div>
-                            <div className="text-[11px] text-emerald-700">
-                              Registrado el {new Date(existingSubmission.submittedAt).toLocaleDateString('es-SV')} · Estado: {existingSubmission.status}
+                      <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl space-y-2.5 text-xs">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <FileCheck className="w-5 h-5 text-emerald-600 shrink-0" />
+                            <div className="min-w-0">
+                              <div className="font-bold text-emerald-900 truncate">
+                                Evidencia entregada: {existingSubmission.fileName}
+                              </div>
+                              <div className="text-[11px] text-emerald-700">
+                                Registrado el {new Date(existingSubmission.submittedAt).toLocaleDateString('es-SV')} ·{' '}
+                                Estado: {existingSubmission.status === 'graded' ? 'Calificada por Docente' : 'Entregada'}
+                              </div>
                             </div>
                           </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {existingSubmission.linkUrl && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setPreviewDoc({
+                                      title: existingSubmission.fileName,
+                                      url: existingSubmission.linkUrl!,
+                                      category: existingSubmission.docCategory || 'document',
+                                    })
+                                  }
+                                  className="px-2.5 py-1 bg-white border border-emerald-300 text-emerald-800 rounded-lg font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                  <span>Vista Previa</span>
+                                </button>
+                                <a
+                                  href={existingSubmission.linkUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-2.5 py-1 bg-white border border-emerald-300 text-emerald-800 rounded-lg font-bold text-[11px] flex items-center gap-1"
+                                >
+                                  <ExternalLink className="w-3.5 h-3.5" />
+                                  <span>Abrir</span>
+                                </a>
+                              </>
+                            )}
+                            {typeof existingSubmission.grade === 'number' ? (
+                              <span className="px-3 py-1 bg-[#4B3B8B] text-white rounded-lg font-mono font-bold text-xs">
+                                Nota: {existingSubmission.grade}/{assignment.maxPoints || 100}
+                              </span>
+                            ) : (
+                              <span className="px-2.5 py-1 bg-emerald-600 text-white rounded-lg font-bold text-[10px]">
+                                Recibido
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          {existingSubmission.linkUrl && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setPreviewDoc({
-                                  title: existingSubmission.fileName,
-                                  url: existingSubmission.linkUrl!,
-                                  category: existingSubmission.docCategory || 'document',
-                                })
-                              }
-                              className="px-2.5 py-1 bg-white border border-emerald-300 text-emerald-800 rounded-lg font-bold text-[11px] flex items-center gap-1 cursor-pointer"
-                            >
-                              <Eye className="w-3.5 h-3.5" />
-                              <span>Ver en Plataforma</span>
-                            </button>
-                          )}
-                          <span className="px-2.5 py-1 bg-emerald-600 text-white rounded-lg font-bold text-[10px]">
-                            Recibido
-                          </span>
-                        </div>
+                        {existingSubmission.feedback && (
+                          <div className="p-3 bg-white border border-emerald-200 rounded-lg text-[11px] text-slate-700">
+                            <strong className="text-[#4B3B8B]">Retroalimentación del Docente:</strong>{' '}
+                            {existingSubmission.feedback}
+                          </div>
+                        )}
                       </div>
                     )}
 
                     <div className="p-4 bg-sky-50 border border-sky-200 rounded-xl text-sky-950 text-xs space-y-3">
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                         <div>
-                          <div className="font-bold">Entrega de Reporte o Enlace en la Nube:</div>
+                          <div className="font-bold">
+                            {deliveryType === 'file'
+                              ? 'Entrega mediante Archivo Local:'
+                              : deliveryType === 'link'
+                              ? 'Entrega mediante Enlace en la Nube / Web:'
+                              : 'Entrega de Reporte o Enlace en la Nube:'}
+                          </div>
                           <p className="text-sky-800 text-[11px]">
-                            Sube un archivo local o vincula tu Documento, Hoja de Cálculo o Presentación en línea.
+                            {deliveryType === 'file'
+                              ? 'Sube tu archivo PDF, Word, Excel, ZIP o fotografía de taller.'
+                              : deliveryType === 'link'
+                              ? 'Vincula tu Documento, Hoja de Cálculo, Presentación o enlace web.'
+                              : 'Sube un archivo local o vincula tu Documento, Hoja de Cálculo o Presentación en línea.'}
                           </p>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() => assignmentFileInputRef.current?.click()}
-                          className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-lg font-bold text-xs shrink-0 cursor-pointer flex items-center gap-1.5"
-                        >
-                          <UploadCloud className="w-4 h-4" />
-                          <span>{existingSubmission ? 'Reemplazar Archivo' : 'Subir Archivo Local'}</span>
-                        </button>
+                        {allowFile && (
+                          <button
+                            type="button"
+                            onClick={() => assignmentFileInputRef.current?.click()}
+                            className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-lg font-bold text-xs shrink-0 cursor-pointer flex items-center gap-1.5"
+                          >
+                            <UploadCloud className="w-4 h-4" />
+                            <span>{existingSubmission ? 'Reemplazar Archivo' : 'Subir Archivo Local'}</span>
+                          </button>
+                        )}
                       </div>
 
-                      {/* 3 Dedicated Cloud Document Submission Buttons */}
-                      <div className="flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setAssignmentLinkCategory('document')}
-                          className="px-3 py-1.5 bg-white hover:bg-sky-100 border border-sky-200 text-sky-900 rounded-lg text-[11px] font-bold flex items-center gap-1.5 cursor-pointer"
-                        >
-                          <FileText className="w-3.5 h-3.5 text-sky-600" />
-                          <span>📄 Documento</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setAssignmentLinkCategory('spreadsheet')}
-                          className="px-3 py-1.5 bg-white hover:bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-lg text-[11px] font-bold flex items-center gap-1.5 cursor-pointer"
-                        >
-                          <Table2 className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>📊 Hoja de Cálculo</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setAssignmentLinkCategory('presentation')}
-                          className="px-3 py-1.5 bg-white hover:bg-amber-50 border border-amber-200 text-amber-900 rounded-lg text-[11px] font-bold flex items-center gap-1.5 cursor-pointer"
-                        >
-                          <Presentation className="w-3.5 h-3.5 text-amber-600" />
-                          <span>📽️ Presentación</span>
-                        </button>
-                      </div>
+                      {allowLink && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAssignmentLinkCategory('document');
+                              if (existingSubmission?.linkUrl) {
+                                setAssignmentCloudTitle(existingSubmission.fileName);
+                                setAssignmentCloudUrl(existingSubmission.linkUrl);
+                              }
+                            }}
+                            className="px-3 py-1.5 bg-white hover:bg-sky-100 border border-sky-200 text-sky-900 rounded-lg text-[11px] font-bold flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <FileText className="w-3.5 h-3.5 text-sky-600" />
+                            <span>📄 Documento</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAssignmentLinkCategory('spreadsheet')}
+                            className="px-3 py-1.5 bg-white hover:bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-lg text-[11px] font-bold flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Table2 className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>📊 Hoja de Cálculo</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAssignmentLinkCategory('presentation')}
+                            className="px-3 py-1.5 bg-white hover:bg-amber-50 border border-amber-200 text-amber-900 rounded-lg text-[11px] font-bold flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Presentation className="w-3.5 h-3.5 text-amber-600" />
+                            <span>📽️ Presentación</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAssignmentLinkCategory('other')}
+                            className="px-3 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 rounded-lg text-[11px] font-bold flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <LinkIcon className="w-3.5 h-3.5 text-[#4B3B8B]" />
+                            <span>🔗 Enlace Web</span>
+                          </button>
+                        </div>
+                      )}
 
-                      {assignmentLinkCategory && (
+                      {allowLink && assignmentLinkCategory && (
                         <div className="p-3 bg-white border border-sky-200 rounded-xl space-y-2">
                           <div className="flex items-center justify-between">
                             <span className="font-bold text-[#4B3B8B] text-[11px]">
@@ -891,6 +1058,8 @@ export const AgapeStudentClassroom: React.FC<AgapeStudentClassroomProps> = ({ co
                                 ? '📊 Enviar enlace de Hoja de Cálculo (Google Sheets / Excel)'
                                 : assignmentLinkCategory === 'presentation'
                                 ? '📽️ Enviar enlace de Presentación (Google Slides / PPT)'
+                                : assignmentLinkCategory === 'other'
+                                ? '🔗 Enviar Enlace Web de Evidencia'
                                 : '📄 Enviar enlace de Documento (Google Docs / Word / OneDrive)'}
                             </span>
                             <button
@@ -920,19 +1089,21 @@ export const AgapeStudentClassroom: React.FC<AgapeStudentClassroomProps> = ({ co
                           <div className="flex justify-end">
                             <button
                               type="button"
-                              disabled={!assignmentCloudUrl.trim() || !activeLesson.assignment}
+                              disabled={!assignmentCloudUrl.trim()}
                               onClick={() => {
-                                if (!activeLesson.assignment || !assignmentCloudUrl.trim()) return;
+                                if (!assignmentCloudUrl.trim()) return;
                                 const title =
                                   assignmentCloudTitle.trim() ||
                                   (assignmentLinkCategory === 'spreadsheet'
                                     ? 'Hoja de Cálculo Entregada'
                                     : assignmentLinkCategory === 'presentation'
                                     ? 'Presentación Entregada'
+                                    : assignmentLinkCategory === 'other'
+                                    ? 'Enlace Web Entregado'
                                     : 'Documento Entregado');
                                 submitAssignmentWork(
                                   course.id,
-                                  activeLesson.assignment.id,
+                                  assignment.id,
                                   title,
                                   assignmentNotesInput.trim() ||
                                     'Evidencia en la nube vinculada desde el Aula Virtual.',
@@ -948,7 +1119,7 @@ export const AgapeStudentClassroom: React.FC<AgapeStudentClassroomProps> = ({ co
                               }}
                               className="px-4 py-1.5 bg-[#4B3B8B] hover:bg-[#3B2D73] disabled:opacity-50 text-white rounded-lg text-xs font-bold cursor-pointer"
                             >
-                              Entregar Enlace
+                              {existingSubmission?.linkUrl ? 'Actualizar Enlace' : 'Entregar Enlace'}
                             </button>
                           </div>
                         </div>
@@ -981,9 +1152,6 @@ export const AgapeStudentClassroom: React.FC<AgapeStudentClassroomProps> = ({ co
                           score,
                           score >= (simLab.passingScore || 70)
                         );
-                      }
-                      if (score >= 70 && !isCompleted && activeLesson) {
-                        toggleLessonCompleted(course.id, activeLesson.id);
                       }
                     }}
                   />
@@ -1050,14 +1218,15 @@ export const AgapeStudentClassroom: React.FC<AgapeStudentClassroomProps> = ({ co
                           >
                             <div className="flex items-center gap-2.5 truncate">
                               <div
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  toggleLessonCompleted(course.id, les.id);
-                                }}
-                                className={`w-4 h-4 rounded-full flex items-center justify-center shrink-0 cursor-pointer ${
+                                title={
+                                  isDone
+                                    ? 'Lección completada automáticamente'
+                                    : 'Se completa automáticamente al ver el video, entregar la tarea y aprobar el simulador'
+                                }
+                                className={`w-4 h-4 rounded-full flex items-center justify-center shrink-0 ${
                                   isDone
                                     ? 'bg-emerald-600 text-white'
-                                    : 'border border-slate-300 hover:border-[#4B3B8B]'
+                                    : 'border border-slate-300 bg-white'
                                 }`}
                               >
                                 {isDone && <Check className="w-3 h-3 stroke-[3]" />}

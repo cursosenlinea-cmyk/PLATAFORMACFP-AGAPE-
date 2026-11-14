@@ -39,6 +39,56 @@ export const isMasterAdminUser = (user?: Pick<AuthUser, 'email' | 'isMasterAdmin
   return user.isMasterAdmin === true || user.email.trim().toLowerCase() === MASTER_ADMIN_EMAIL;
 };
 
+export interface LessonRequirementStatus {
+  hasVideo: boolean;
+  videoWatched: boolean;
+  hasAssignment: boolean;
+  assignmentDone: boolean;
+  hasActiveSimulator: boolean;
+  simulatorDone: boolean;
+  allMet: boolean;
+}
+
+export const evaluateLessonAutoRequirements = (
+  lesson: Lesson,
+  courseProg?: StudentProgress
+): LessonRequirementStatus => {
+  const hasVideo = Boolean(lesson.videoUrl && lesson.videoUrl.trim() !== '');
+  const videoWatched = !hasVideo || Boolean(courseProg?.watchedVideoLessonIds?.includes(lesson.id));
+
+  const hasAssignment = Boolean(lesson.assignment);
+  const assignmentDone =
+    !hasAssignment || Boolean(courseProg?.assignmentSubmissions?.[lesson.assignment!.id]);
+
+  const hasActiveSimulator = Boolean(
+    lesson.simulatorLab && lesson.simulatorEnabledByAdmin === true
+  );
+  const simulatorDone =
+    !hasActiveSimulator ||
+    Boolean(courseProg?.simulatorScores?.[lesson.simulatorLab!.id]?.passed);
+
+  return {
+    hasVideo,
+    videoWatched,
+    hasAssignment,
+    assignmentDone,
+    hasActiveSimulator,
+    simulatorDone,
+    allMet: videoWatched && assignmentDone && simulatorDone,
+  };
+};
+
+const computeCompletedLessonIdsForCourse = (
+  course: Course | undefined,
+  courseProg?: StudentProgress
+): string[] => {
+  if (!course) return courseProg?.completedLessonIds || [];
+  return course.modules
+    .flatMap((m) => m.lessons)
+    .filter((l) => evaluateLessonAutoRequirements(l, courseProg).allMet)
+    .map((l) => l.id);
+};
+
 interface LmsContextType {
   role: UserRole;
   currentUser: UserProfile;
@@ -111,12 +161,19 @@ interface LmsContextType {
 
   // Student Actions & Progress
   progress: Record<string, StudentProgress>;
-  isLessonCompleted: (courseId: string, lessonId: string) => boolean;
+  isLessonCompleted: (courseId: string, lessonId: string, userId?: string) => boolean;
+  getLessonRequirementStatus: (
+    courseId: string,
+    lessonId: string,
+    userId?: string
+  ) => LessonRequirementStatus;
+  markLessonVideoWatched: (courseId: string, lessonId: string) => void;
   toggleLessonCompleted: (courseId: string, lessonId: string) => void;
   getCourseProgressPercent: (courseId: string, userId?: string) => number;
   getModuleProgress: (
     courseId: string,
-    moduleId: string
+    moduleId: string,
+    userId?: string
   ) => { completed: number; total: number; percentage: number };
   submitQuizAttempt: (
     courseId: string,
@@ -132,7 +189,22 @@ interface LmsContextType {
     notes: string,
     fileSize?: string,
     linkUrl?: string,
-    docCategory?: DocCategory
+    docCategory?: DocCategory,
+    fileData?: string
+  ) => void;
+  gradeStudentAssignment: (
+    studentId: string,
+    courseId: string,
+    assignmentId: string,
+    grade: number,
+    feedback: string
+  ) => void;
+  requestCertificate: (courseId: string) => void;
+  reviewCertificateRequest: (
+    studentId: string,
+    courseId: string,
+    decision: 'approved' | 'rejected',
+    note?: string
   ) => void;
   saveLessonNote: (courseId: string, lessonId: string, note: string) => void;
   getLessonNote: (courseId: string, lessonId: string) => string;
@@ -173,6 +245,13 @@ interface LmsContextType {
     moduleId: string,
     lessonId: string,
     res: Omit<ResourceItem, 'id'>
+  ) => void;
+  updateResource: (
+    courseId: string,
+    moduleId: string,
+    lessonId: string,
+    resourceId: string,
+    updates: Partial<ResourceItem>
   ) => void;
   deleteResource: (
     courseId: string,
@@ -767,31 +846,58 @@ export const LmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return `${uid}::${courseId}`;
   };
 
-  const isLessonCompleted = (courseId: string, lessonId: string): boolean => {
-    const key = getProgressKey(courseId);
-    const courseProg = progress[key] || progress[courseId];
-    return !!courseProg?.completedLessonIds.includes(lessonId);
+  const getEmptyCourseProgress = (courseId: string): StudentProgress => ({
+    courseId,
+    completedLessonIds: [],
+    watchedVideoLessonIds: [],
+    quizAttempts: {},
+    assignmentSubmissions: {},
+    notesByLesson: {},
+    simulatorScores: {},
+  });
+
+  const getLessonRequirementStatus = (
+    courseId: string,
+    lessonId: string,
+    userId?: string
+  ): LessonRequirementStatus => {
+    const course = courses.find((c) => c.id === courseId);
+    const lesson = course?.modules.flatMap((m) => m.lessons).find((l) => l.id === lessonId);
+    if (!lesson) {
+      return {
+        hasVideo: false,
+        videoWatched: true,
+        hasAssignment: false,
+        assignmentDone: true,
+        hasActiveSimulator: false,
+        simulatorDone: true,
+        allMet: false,
+      };
+    }
+    const key = getProgressKey(courseId, userId);
+    const courseProg = progress[key] || (!userId ? progress[courseId] : undefined);
+    return evaluateLessonAutoRequirements(lesson, courseProg);
   };
 
-  const toggleLessonCompleted = (courseId: string, lessonId: string) => {
+  const isLessonCompleted = (courseId: string, lessonId: string, userId?: string): boolean => {
+    return getLessonRequirementStatus(courseId, lessonId, userId).allMet;
+  };
+
+  const markLessonVideoWatched = (courseId: string, lessonId: string) => {
     const key = getProgressKey(courseId);
     const prev = progressRef.current;
-    const currentCourseProg = prev[key] || {
-      courseId,
-      completedLessonIds: [],
-      quizAttempts: {},
-      assignmentSubmissions: {},
-      notesByLesson: {},
-    };
+    const currentCourseProg = prev[key] || getEmptyCourseProgress(courseId);
+    const watchedSet = new Set(currentCourseProg.watchedVideoLessonIds || []);
+    watchedSet.add(lessonId);
 
-    const isCompleted = currentCourseProg.completedLessonIds.includes(lessonId);
-    const newCompleted = isCompleted
-      ? currentCourseProg.completedLessonIds.filter((id) => id !== lessonId)
-      : [...currentCourseProg.completedLessonIds, lessonId];
-
-    const updatedEntry: StudentProgress = {
+    const draftEntry: StudentProgress = {
       ...currentCourseProg,
-      completedLessonIds: newCompleted,
+      watchedVideoLessonIds: Array.from(watchedSet),
+    };
+    const course = coursesRef.current.find((c) => c.id === courseId);
+    const updatedEntry: StudentProgress = {
+      ...draftEntry,
+      completedLessonIds: computeCompletedLessonIdsForCourse(course, draftEntry),
     };
 
     const nextProgress = { ...prev, [key]: updatedEntry };
@@ -800,26 +906,47 @@ export const LmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     pushProgressEntryToServer(key, updatedEntry);
   };
 
+  const toggleLessonCompleted = (courseId: string, lessonId: string) => {
+    // Maintained strictly for backwards compatibility; re-evaluates automatic requirements
+    const key = getProgressKey(courseId);
+    const prev = progressRef.current;
+    const currentCourseProg = prev[key] || getEmptyCourseProgress(courseId);
+    const course = coursesRef.current.find((c) => c.id === courseId);
+    const updatedEntry: StudentProgress = {
+      ...currentCourseProg,
+      completedLessonIds: computeCompletedLessonIdsForCourse(course, currentCourseProg),
+    };
+    const nextProgress = { ...prev, [key]: updatedEntry };
+    progressRef.current = nextProgress;
+    setProgress(nextProgress);
+    pushProgressEntryToServer(key, updatedEntry);
+    void lessonId;
+  };
+
   const getCourseProgressPercent = (courseId: string, userId?: string): number => {
     const course = courses.find((c) => c.id === courseId);
     if (!course) return 0;
     const allLessons = course.modules.flatMap((m) => m.lessons);
     if (allLessons.length === 0) return 0;
     const key = getProgressKey(courseId, userId);
-    const completed = progress[key]?.completedLessonIds || [];
-    const validCompleted = completed.filter((id) => allLessons.some((l) => l.id === id));
-    return Math.round((validCompleted.length / allLessons.length) * 100);
+    const courseProg = progress[key];
+    const completedCount = allLessons.filter(
+      (l) => evaluateLessonAutoRequirements(l, courseProg).allMet
+    ).length;
+    return Math.round((completedCount / allLessons.length) * 100);
   };
 
-  const getModuleProgress = (courseId: string, moduleId: string) => {
+  const getModuleProgress = (courseId: string, moduleId: string, userId?: string) => {
     const course = courses.find((c) => c.id === courseId);
     if (!course) return { completed: 0, total: 0, percentage: 0 };
     const mod = course.modules.find((m) => m.id === moduleId);
     if (!mod || mod.lessons.length === 0) return { completed: 0, total: 0, percentage: 0 };
 
-    const key = getProgressKey(courseId);
-    const completed = progress[key]?.completedLessonIds || [];
-    const completedCount = mod.lessons.filter((l) => completed.includes(l.id)).length;
+    const key = getProgressKey(courseId, userId);
+    const courseProg = progress[key];
+    const completedCount = mod.lessons.filter(
+      (l) => evaluateLessonAutoRequirements(l, courseProg).allMet
+    ).length;
     const percentage = Math.round((completedCount / mod.lessons.length) * 100);
     return { completed: completedCount, total: mod.lessons.length, percentage };
   };
@@ -833,27 +960,10 @@ export const LmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ) => {
     const key = getProgressKey(courseId);
     const prev = progressRef.current;
-    const currentCourseProg = prev[key] || {
-      courseId,
-      completedLessonIds: [],
-      quizAttempts: {},
-      assignmentSubmissions: {},
-      notesByLesson: {},
-    };
+    const currentCourseProg = prev[key] || getEmptyCourseProgress(courseId);
 
-    const currentLesson = coursesRef.current
-      .find((c) => c.id === courseId)
-      ?.modules.flatMap((m) => m.lessons)
-      .find((l) => l.quiz?.id === quizId);
-
-    const completedIds = new Set(currentCourseProg.completedLessonIds);
-    if (passed && currentLesson) {
-      completedIds.add(currentLesson.id);
-    }
-
-    const updatedEntry: StudentProgress = {
+    const draftEntry: StudentProgress = {
       ...currentCourseProg,
-      completedLessonIds: Array.from(completedIds),
       quizAttempts: {
         ...currentCourseProg.quizAttempts,
         [quizId]: {
@@ -865,6 +975,11 @@ export const LmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           completedAt: new Date().toISOString(),
         },
       },
+    };
+    const course = coursesRef.current.find((c) => c.id === courseId);
+    const updatedEntry: StudentProgress = {
+      ...draftEntry,
+      completedLessonIds: computeCompletedLessonIdsForCourse(course, draftEntry),
     };
 
     const nextProgress = { ...prev, [key]: updatedEntry };
@@ -880,31 +995,15 @@ export const LmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     notes: string,
     fileSize: string = '1.8 MB',
     linkUrl?: string,
-    docCategory?: DocCategory
+    docCategory?: DocCategory,
+    fileData?: string
   ) => {
     const key = getProgressKey(courseId);
     const prev = progressRef.current;
-    const currentCourseProg = prev[key] || {
-      courseId,
-      completedLessonIds: [],
-      quizAttempts: {},
-      assignmentSubmissions: {},
-      notesByLesson: {},
-    };
+    const currentCourseProg = prev[key] || getEmptyCourseProgress(courseId);
 
-    const currentLesson = coursesRef.current
-      .find((c) => c.id === courseId)
-      ?.modules.flatMap((m) => m.lessons)
-      .find((l) => l.assignment?.id === assignmentId);
-
-    const completedIds = new Set(currentCourseProg.completedLessonIds);
-    if (currentLesson) {
-      completedIds.add(currentLesson.id);
-    }
-
-    const updatedEntry: StudentProgress = {
+    const draftEntry: StudentProgress = {
       ...currentCourseProg,
-      completedLessonIds: Array.from(completedIds),
       assignmentSubmissions: {
         ...currentCourseProg.assignmentSubmissions,
         [assignmentId]: {
@@ -914,11 +1013,110 @@ export const LmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           submittedAt: new Date().toISOString(),
           fileName,
           fileSize,
+          fileData,
           notes,
           linkUrl,
           docCategory,
           status: 'submitted',
         },
+      },
+    };
+    const course = coursesRef.current.find((c) => c.id === courseId);
+    const updatedEntry: StudentProgress = {
+      ...draftEntry,
+      completedLessonIds: computeCompletedLessonIdsForCourse(course, draftEntry),
+    };
+
+    const nextProgress = { ...prev, [key]: updatedEntry };
+    progressRef.current = nextProgress;
+    setProgress(nextProgress);
+    pushProgressEntryToServer(key, updatedEntry);
+  };
+
+  const gradeStudentAssignment = (
+    studentId: string,
+    courseId: string,
+    assignmentId: string,
+    grade: number,
+    feedback: string
+  ) => {
+    const key = getProgressKey(courseId, studentId);
+    const prev = progressRef.current;
+    const currentCourseProg = prev[key] || getEmptyCourseProgress(courseId);
+    const existingSub = currentCourseProg.assignmentSubmissions?.[assignmentId];
+    if (!existingSub) return;
+
+    const cleanGrade = Math.max(0, Math.min(100, Math.round(Number(grade) || 0)));
+    const updatedEntry: StudentProgress = {
+      ...currentCourseProg,
+      assignmentSubmissions: {
+        ...currentCourseProg.assignmentSubmissions,
+        [assignmentId]: {
+          ...existingSub,
+          grade: cleanGrade,
+          feedback: feedback.trim(),
+          status: 'graded',
+          gradedAt: new Date().toISOString(),
+          gradedBy: currentUser.name,
+        },
+      },
+    };
+
+    const nextProgress = { ...prev, [key]: updatedEntry };
+    progressRef.current = nextProgress;
+    setProgress(nextProgress);
+    pushProgressEntryToServer(key, updatedEntry);
+  };
+
+  const requestCertificate = (courseId: string) => {
+    const key = getProgressKey(courseId);
+    const prev = progressRef.current;
+    const currentCourseProg = prev[key] || getEmptyCourseProgress(courseId);
+
+    const updatedEntry: StudentProgress = {
+      ...currentCourseProg,
+      certificateRequest: {
+        ...(currentCourseProg.certificateRequest || {}),
+        status: 'pending',
+        requestedAt: new Date().toISOString(),
+        rejectionNote: undefined,
+      },
+    };
+
+    const nextProgress = { ...prev, [key]: updatedEntry };
+    progressRef.current = nextProgress;
+    setProgress(nextProgress);
+    pushProgressEntryToServer(key, updatedEntry);
+  };
+
+  const reviewCertificateRequest = (
+    studentId: string,
+    courseId: string,
+    decision: 'approved' | 'rejected',
+    note?: string
+  ) => {
+    const key = getProgressKey(courseId, studentId);
+    const prev = progressRef.current;
+    const currentCourseProg = prev[key] || getEmptyCourseProgress(courseId);
+    const existingReq = currentCourseProg.certificateRequest || { status: 'pending' };
+    const folio =
+      existingReq.certificateFolio ||
+      `CFP-${courseId.substring(0, 6).toUpperCase()}-${studentId.slice(-4).toUpperCase()}`;
+
+    const now = new Date().toISOString();
+    const updatedEntry: StudentProgress = {
+      ...currentCourseProg,
+      certificateIssuedAt: decision === 'approved' ? now : currentCourseProg.certificateIssuedAt,
+      certificateRequest: {
+        ...existingReq,
+        status: decision,
+        reviewedAt: now,
+        reviewedBy: currentUser.name,
+        certificateFolio: decision === 'approved' ? folio : existingReq.certificateFolio,
+        rejectionNote:
+          decision === 'rejected'
+            ? note?.trim() || 'Solicitud devuelta por Coordinación para revisión de notas.'
+            : undefined,
       },
     };
 
@@ -931,13 +1129,7 @@ export const LmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const saveLessonNote = (courseId: string, lessonId: string, note: string) => {
     const key = getProgressKey(courseId);
     const prev = progressRef.current;
-    const currentCourseProg = prev[key] || {
-      courseId,
-      completedLessonIds: [],
-      quizAttempts: {},
-      assignmentSubmissions: {},
-      notesByLesson: {},
-    };
+    const currentCourseProg = prev[key] || getEmptyCourseProgress(courseId);
 
     const updatedEntry: StudentProgress = {
       ...currentCourseProg,
@@ -967,27 +1159,26 @@ export const LmsProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ) => {
     const key = getProgressKey(courseId);
     const prev = progressRef.current;
-    const currentCourseProg = prev[key] || {
-      courseId,
-      completedLessonIds: [],
-      quizAttempts: {},
-      assignmentSubmissions: {},
-      notesByLesson: {},
-      simulatorScores: {},
-    };
+    const currentCourseProg = prev[key] || getEmptyCourseProgress(courseId);
 
-    const updatedEntry: StudentProgress = {
+    const prevRecord = currentCourseProg.simulatorScores?.[simulatorId];
+    const draftEntry: StudentProgress = {
       ...currentCourseProg,
       simulatorScores: {
         ...(currentCourseProg.simulatorScores || {}),
         [simulatorId]: {
           simulatorId,
           title,
-          score,
-          passed,
+          score: Math.max(score, prevRecord?.score || 0),
+          passed: passed || Boolean(prevRecord?.passed),
           completedAt: new Date().toISOString(),
         },
       },
+    };
+    const course = coursesRef.current.find((c) => c.id === courseId);
+    const updatedEntry: StudentProgress = {
+      ...draftEntry,
+      completedLessonIds: computeCompletedLessonIdsForCourse(course, draftEntry),
     };
 
     const nextProgress = { ...prev, [key]: updatedEntry };
@@ -2540,6 +2731,39 @@ PROCEDIMIENTO TÉCNICO:
     );
   };
 
+  const updateResource = (
+    courseId: string,
+    moduleId: string,
+    lessonId: string,
+    resourceId: string,
+    updates: Partial<ResourceItem>
+  ) => {
+    updateCoursesState((prev) =>
+      prev.map((c) => {
+        if (c.id !== courseId) return c;
+        return {
+          ...c,
+          modules: c.modules.map((m) => {
+            if (m.id !== moduleId) return m;
+            return {
+              ...m,
+              lessons: m.lessons.map((l) => {
+                if (l.id !== lessonId) return l;
+                return {
+                  ...l,
+                  resources: l.resources.map((r) =>
+                    r.id === resourceId ? { ...r, ...updates } : r
+                  ),
+                };
+              }),
+            };
+          }),
+          updatedAt: new Date().toISOString().split('T')[0],
+        };
+      })
+    );
+  };
+
   const deleteResource = (
     courseId: string,
     moduleId: string,
@@ -2744,11 +2968,16 @@ PROCEDIMIENTO TÉCNICO:
         closeCertificate,
         progress,
         isLessonCompleted,
+        getLessonRequirementStatus,
+        markLessonVideoWatched,
         toggleLessonCompleted,
         getCourseProgressPercent,
         getModuleProgress,
         submitQuizAttempt,
         submitAssignmentWork,
+        gradeStudentAssignment,
+        requestCertificate,
+        reviewCertificateRequest,
         saveLessonNote,
         getLessonNote,
         recordSimulatorScore,
@@ -2769,6 +2998,7 @@ PROCEDIMIENTO TÉCNICO:
         updateLesson,
         deleteLesson,
         addResource,
+        updateResource,
         deleteResource,
         saveQuiz,
         saveAssignment,

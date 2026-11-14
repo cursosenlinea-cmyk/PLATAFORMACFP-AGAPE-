@@ -55,6 +55,8 @@ export interface QuizAttempt {
   completedAt: string;
 }
 
+export type AssignmentDeliveryType = 'file' | 'link' | 'both';
+
 export interface Assignment {
   id: string;
   title: string;
@@ -62,6 +64,7 @@ export interface Assignment {
   instructions: string;
   maxPoints: number;
   dueDate: string;
+  deliveryType?: AssignmentDeliveryType;
   templateUrl?: string;
   templateName?: string;
 }
@@ -73,12 +76,15 @@ export interface AssignmentSubmission {
   submittedAt: string;
   fileName: string;
   fileSize?: string;
+  fileData?: string;
   notes?: string;
   linkUrl?: string;
   docCategory?: DocCategory;
   status: 'submitted' | 'graded';
   grade?: number;
   feedback?: string;
+  gradedAt?: string;
+  gradedBy?: string;
 }
 
 export interface Instructor {
@@ -235,14 +241,27 @@ export interface SimulatorAttemptRecord {
   completedAt: string;
 }
 
+export type CertificateRequestStatus = 'none' | 'pending' | 'approved' | 'rejected';
+
+export interface CertificateRequestInfo {
+  status: CertificateRequestStatus;
+  requestedAt?: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  rejectionNote?: string;
+  certificateFolio?: string;
+}
+
 export interface StudentProgress {
   courseId: string;
   completedLessonIds: string[];
+  watchedVideoLessonIds?: string[];
   quizAttempts: Record<string, QuizAttempt>;
   assignmentSubmissions: Record<string, AssignmentSubmission>;
   notesByLesson: Record<string, string>;
   simulatorScores?: Record<string, SimulatorAttemptRecord>;
   certificateIssuedAt?: string;
+  certificateRequest?: CertificateRequestInfo;
 }
 
 export interface UserProfile {

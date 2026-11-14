@@ -12,6 +12,7 @@ import {
   FlaskConical,
   LogOut,
   FolderKanban,
+  Award,
 } from 'lucide-react';
 import { useLms, isMasterAdminUser } from '../../context/LmsContext';
 
@@ -21,13 +22,23 @@ interface AgapeSidebarProps {
 }
 
 export const AgapeSidebar: React.FC<AgapeSidebarProps> = ({ currentTab, onSelectTab }) => {
-  const { role, currentAuthUser, logout } = useLms();
+  const { role, currentAuthUser, logout, progress } = useLms();
   const isMaster = isMasterAdminUser(currentAuthUser);
+
+  const pendingCertCount = Object.values(progress).filter(
+    (p) => p.certificateRequest?.status === 'pending'
+  ).length;
 
   const adminMenuItems = [
     { id: 'admin-users', label: 'Usuarios y Admins', icon: Users },
     { id: 'admin-courses', label: 'Cursos y Matrículas', icon: FolderKanban },
     { id: 'simulators', label: 'Control Simuladores IA', icon: FlaskConical },
+    {
+      id: 'admin-certificates',
+      label: 'Solicitudes Certificados',
+      icon: Award,
+      badge: pendingCertCount,
+    },
     { id: 'courses', label: 'Editor de Contenidos', icon: BookOpen },
     { id: 'branding', label: 'Identidad Institucional', icon: Settings },
   ];
@@ -46,7 +57,12 @@ export const AgapeSidebar: React.FC<AgapeSidebarProps> = ({ currentTab, onSelect
     { id: 'branding', label: 'Campus CFP ÁGAPE', icon: Settings },
   ];
 
-  const menuItems =
+  const menuItems: {
+    id: string;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    badge?: number;
+  }[] =
     role === 'admin'
       ? adminMenuItems
       : role === 'instructor'
@@ -115,8 +131,19 @@ export const AgapeSidebar: React.FC<AgapeSidebarProps> = ({ currentTab, onSelect
                   : 'text-slate-700 hover:text-[#4B3B8B] hover:bg-white/60'
               }`}
             >
-              <Icon className={`w-5 h-5 ${isActive ? 'text-white' : 'text-slate-500'}`} />
-              <span className="tracking-tight text-left">{item.label}</span>
+              <Icon className={`w-5 h-5 shrink-0 ${isActive ? 'text-white' : 'text-slate-500'}`} />
+              <span className="tracking-tight text-left flex-1">{item.label}</span>
+              {typeof item.badge === 'number' && item.badge > 0 && (
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold font-mono ${
+                    isActive
+                      ? 'bg-[#F2C94C] text-[#3B2C73]'
+                      : 'bg-amber-500 text-white'
+                  }`}
+                >
+                  {item.badge}
+                </span>
+              )}
             </button>
           );
         })}

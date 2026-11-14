@@ -2,6 +2,7 @@ import React from 'react';
 import { X, Play, Clock, BookOpen, Award, CheckCircle } from 'lucide-react';
 import { Course } from '../../types/lms';
 import { VideoPlayer } from './VideoPlayer';
+import { useLms } from '../../context/LmsContext';
 
 interface TrailerModalProps {
   course: Course | null;
@@ -14,6 +15,7 @@ export const TrailerModal: React.FC<TrailerModalProps> = ({
   onClose,
   onEnroll,
 }) => {
+  const { role } = useLms();
   if (!course) return null;
 
   const totalLessons = course.modules.reduce((acc, m) => acc + m.lessons.length, 0);
@@ -66,7 +68,7 @@ export const TrailerModal: React.FC<TrailerModalProps> = ({
                   Lo que aprenderás en los módulos:
                 </h5>
                 <ul className="grid grid-cols-1 gap-2 text-sm text-slate-700">
-                  {course.modules.slice(0, 3).map((mod, idx) => (
+                  {course.modules.slice(0, 3).map((mod) => (
                     <li key={mod.id} className="flex items-start gap-2">
                       <CheckCircle className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
                       <span>{mod.title}</span>
@@ -79,10 +81,12 @@ export const TrailerModal: React.FC<TrailerModalProps> = ({
             {/* Sidebar Card */}
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 flex flex-col justify-between space-y-4">
               <div className="space-y-3 text-sm">
-                <div className="flex items-center justify-between text-slate-700 pb-2 border-b border-slate-200">
-                  <span className="text-slate-500">Inversión:</span>
-                  <span className="text-xl font-bold font-mono text-slate-900">${course.price} USD</span>
-                </div>
+                {role === 'admin' && (
+                  <div className="flex items-center justify-between text-slate-700 pb-2 border-b border-slate-200">
+                    <span className="text-slate-500">Inversión:</span>
+                    <span className="text-xl font-bold font-mono text-slate-900">${course.price} USD</span>
+                  </div>
+                )}
                 <div className="flex items-center gap-2 text-slate-600">
                   <Clock className="w-4 h-4 text-slate-400" />
                   <span>{totalHours} horas de video</span>

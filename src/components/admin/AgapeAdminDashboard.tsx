@@ -26,6 +26,10 @@ import {
   AlertTriangle,
   CheckCircle2,
   UserCheck,
+  Award,
+  Clock,
+  DollarSign,
+  FileCheck,
 } from 'lucide-react';
 import { useLms, isMasterAdminUser } from '../../context/LmsContext';
 import {
@@ -41,7 +45,7 @@ import { AgapeSimulatorPlayer } from '../agape/AgapeSimulatorPlayer';
 import { compressImageFileToDataUrl, parseStudentsCSV } from '../../utils/imageUtils';
 
 interface AgapeAdminDashboardProps {
-  initialTab?: 'users' | 'courses' | 'simulators';
+  initialTab?: 'users' | 'courses' | 'simulators' | 'certificates';
   onNavigateToCourseEdit?: (courseId: string) => void;
 }
 
@@ -69,9 +73,14 @@ export const AgapeAdminDashboard: React.FC<AgapeAdminDashboardProps> = ({
     toggleCourseSimulator,
     toggleLessonSimulator,
     setSelectedCourseId,
+    progress,
+    reviewCertificateRequest,
+    getCourseProgressPercent,
   } = useLms();
 
-  const [activeTab, setActiveTab] = useState<'users' | 'courses' | 'simulators'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'users' | 'courses' | 'simulators' | 'certificates'>(
+    initialTab
+  );
 
   // Sync external initialTab changes from sidebar
   React.useEffect(() => {
@@ -131,7 +140,20 @@ export const AgapeAdminDashboard: React.FC<AgapeAdminDashboardProps> = ({
     '/assets/images/course_cover_webdev_1793144124323.jpg'
   );
   const [cTeacherIds, setCTeacherIds] = useState<string[]>([]);
+  const [cPrice, setCPrice] = useState<string>('0');
   const courseCoverInputRef = useRef<HTMLInputElement>(null);
+
+  // Edit Existing Course Modal (Admin includes Price/Cost control)
+  const [editingCourseModal, setEditingCourseModal] = useState<Course | null>(null);
+  const [ecTitle, setEcTitle] = useState<string>('');
+  const [ecSubtitle, setEcSubtitle] = useState<string>('');
+  const [ecCategory, setEcCategory] = useState<string>('');
+  const [ecLevel, setEcLevel] = useState<CourseLevel>('Principiante');
+  const [ecPrice, setEcPrice] = useState<string>('0');
+  const [ecStatus, setEcStatus] = useState<CourseStatus>('Publicado');
+  const [ecDescription, setEcDescription] = useState<string>('');
+  const [ecCoverImage, setEcCoverImage] = useState<string>('');
+  const editCourseCoverInputRef = useRef<HTMLInputElement>(null);
 
   // Teacher Assignment Modal per Course
   const [assignTeachersCourse, setAssignTeachersCourse] = useState<Course | null>(null);
@@ -149,10 +171,61 @@ export const AgapeAdminDashboard: React.FC<AgapeAdminDashboardProps> = ({
   // =========================================================
   const [inspectSimulatorLab, setInspectSimulatorLab] = useState<SimulatorLab | null>(null);
 
+  // =========================================================
+  // TAB 4 STATE: CERTIFICATE REQUESTS
+  // =========================================================
+  const [certFilter, setCertFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
+  const [rejectCertTarget, setRejectCertTarget] = useState<{
+    studentId: string;
+    courseId: string;
+    studentName: string;
+    courseTitle: string;
+  } | null>(null);
+  const [rejectCertNote, setRejectCertNote] = useState<string>('');
+
   // Derived collections
   const admins = registeredUsers.filter((u) => u.role === 'admin');
   const teachers = registeredUsers.filter((u) => u.role === 'instructor');
   const students = registeredUsers.filter((u) => u.role === 'student');
+
+  const certificateRequests = Object.entries(progress)
+    .map(([key, prog]) => {
+      if (!prog.certificateRequest || prog.certificateRequest.status === 'none') return null;
+      const sepIdx = key.indexOf('::');
+      if (sepIdx === -1) return null;
+      const studentId = key.slice(0, sepIdx);
+      const courseId = key.slice(sepIdx + 2);
+      const student = registeredUsers.find((u) => u.id === studentId);
+      const course = courses.find((c) => c.id === courseId);
+      if (!student || !course) return null;
+      return {
+        key,
+        studentId,
+        courseId,
+        student,
+        course,
+        prog,
+        req: prog.certificateRequest,
+        percent: getCourseProgressPercent(course.id, student.id),
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null)
+    .sort((a, b) => {
+      const order = { pending: 0, rejected: 1, approved: 2, none: 3 };
+      const diff = order[a.req.status] - order[b.req.status];
+      if (diff !== 0) return diff;
+      return (b.req.requestedAt || '').localeCompare(a.req.requestedAt || '');
+    });
+
+  const pendingCertificatesCount = certificateRequests.filter(
+    (r) => r.req.status === 'pending'
+  ).length;
+  const approvedCertificatesCount = certificateRequests.filter(
+    (r) => r.req.status === 'approved'
+  ).length;
+  const filteredCertificateRequests = certificateRequests.filter(
+    (r) => certFilter === 'all' || r.req.status === certFilter
+  );
 
   const filteredUsers = registeredUsers.filter((u) => {
     const matchesRole = roleFilter === 'all' || u.role === roleFilter;
@@ -321,6 +394,7 @@ export const AgapeAdminDashboard: React.FC<AgapeAdminDashboardProps> = ({
       subtitle: cSubtitle.trim() || `Programa Técnico · ${cCategory}`,
       category: cCategory.trim() || 'Formación Técnica',
       level: cLevel,
+      price: Math.max(0, Number(cPrice) || 0),
       status: cStatus,
       description:
         cDescription.trim() ||
@@ -332,8 +406,50 @@ export const AgapeAdminDashboard: React.FC<AgapeAdminDashboardProps> = ({
     setShowCreateCourseModal(false);
     setCTitle('');
     setCSubtitle('');
+    setCPrice('0');
     setCDescription('');
     setCTeacherIds([]);
+  };
+
+  const openEditCourseModal = (course: Course) => {
+    setEditingCourseModal(course);
+    setEcTitle(course.title);
+    setEcSubtitle(course.subtitle || '');
+    setEcCategory(course.category || '');
+    setEcLevel(course.level);
+    setEcPrice(String(course.price ?? 0));
+    setEcStatus(course.status);
+    setEcDescription(course.description || '');
+    setEcCoverImage(course.coverImage || '');
+  };
+
+  const handleEditCourseCoverChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const compressed = await compressImageFileToDataUrl(file, 720, 0.82);
+      setEcCoverImage(compressed);
+    } catch {
+      showToast('No se pudo procesar la imagen de portada.', 'error');
+    }
+    e.target.value = '';
+  };
+
+  const handleSaveEditCourseSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCourseModal || !ecTitle.trim()) return;
+    updateCourse(editingCourseModal.id, {
+      title: ecTitle.trim(),
+      subtitle: ecSubtitle.trim(),
+      category: ecCategory.trim() || 'Formación Técnica',
+      level: ecLevel,
+      price: Math.max(0, Number(ecPrice) || 0),
+      status: ecStatus,
+      description: ecDescription.trim(),
+      coverImage: ecCoverImage || editingCourseModal.coverImage,
+    });
+    showToast(`Curso "${ecTitle.trim()}" actualizado correctamente.`);
+    setEditingCourseModal(null);
   };
 
   const handleCsvFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -430,6 +546,13 @@ export const AgapeAdminDashboard: React.FC<AgapeAdminDashboardProps> = ({
         accept="image/*"
         className="hidden"
         onChange={handleCourseCoverChange}
+      />
+      <input
+        ref={editCourseCoverInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={handleEditCourseCoverChange}
       />
       <input
         ref={csvFileInputRef}
@@ -601,6 +724,27 @@ export const AgapeAdminDashboard: React.FC<AgapeAdminDashboardProps> = ({
           <span>Control de Simuladores IA</span>
           <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-[#F2C94C] text-[#3B2C73] font-mono font-extrabold">
             {activeSimulatorsCount}/{totalSimulators}
+          </span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('certificates')}
+          className={`flex-1 min-w-[160px] py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+            activeTab === 'certificates'
+              ? 'bg-[#4B3B8B] text-white shadow-xs'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+          }`}
+        >
+          <Award className="w-4 h-4" />
+          <span>Solicitudes de Certificados</span>
+          <span
+            className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-extrabold ${
+              pendingCertificatesCount > 0
+                ? 'bg-[#F2C94C] text-[#3B2C73]'
+                : 'bg-slate-200 text-slate-700'
+            }`}
+          >
+            {pendingCertificatesCount}
           </span>
         </button>
       </div>
@@ -984,10 +1128,24 @@ export const AgapeAdminDashboard: React.FC<AgapeAdminDashboardProps> = ({
                         </span>
                         <span className="text-slate-600">estudiantes matriculados</span>
                       </div>
+                      <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                        <DollarSign className="w-3.5 h-3.5 text-amber-700" />
+                        <span className="text-amber-900 font-bold">
+                          {course.price > 0 ? `$${course.price.toFixed(2)} USD` : 'Beca / Gratuito'}
+                        </span>
+                      </div>
                     </div>
 
                     {/* Action Buttons */}
                     <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
+                      <button
+                        onClick={() => openEditCourseModal(course)}
+                        className="px-3 py-1.5 bg-white border border-slate-300 hover:border-[#4B3B8B] text-slate-700 hover:text-[#4B3B8B] text-xs font-bold rounded-lg flex items-center gap-1.5 cursor-pointer transition-colors"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span>Editar Curso / Costo</span>
+                      </button>
+
                       <button
                         onClick={() => {
                           setAssignTeachersCourse(course);
@@ -1190,6 +1348,302 @@ export const AgapeAdminDashboard: React.FC<AgapeAdminDashboardProps> = ({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 4: SOLICITUDES DE CERTIFICADOS Y EMISIÓN ADMINISTRATIVA */}
+      {/* ========================================================================= */}
+      {activeTab === 'certificates' && (
+        <div className="space-y-5">
+          <div className="bg-gradient-to-r from-[#FAF8FF] to-indigo-50 border border-[#4B3B8B]/20 rounded-2xl p-5 space-y-2">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-2 text-[#3B2C73] font-extrabold text-sm">
+                <Award className="w-5 h-5 text-[#4B3B8B]" />
+                <span>Bandeja de Solicitudes de Certificados · Control Administrativo</span>
+              </div>
+              <div className="flex items-center gap-2 text-xs font-bold">
+                <span className="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800">
+                  {pendingCertificatesCount} Pendientes
+                </span>
+                <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800">
+                  {approvedCertificatesCount} Emitidos
+                </span>
+              </div>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Los estudiantes solo pueden solicitar su diploma al alcanzar el <strong>100% de avance automático</strong> (videos completos, tareas enviadas y simuladores aprobados). Revisa aquí las calificaciones registradas por el Docente antes de hacer clic en <strong>✅ Emitir / Autorizar Certificado</strong>.
+            </p>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-3 flex flex-wrap gap-2">
+            {(
+              [
+                { id: 'all', label: `Todas (${certificateRequests.length})` },
+                { id: 'pending', label: `Pendientes (${pendingCertificatesCount})` },
+                { id: 'approved', label: `Emitidas (${approvedCertificatesCount})` },
+                {
+                  id: 'rejected',
+                  label: `Devueltas (${
+                    certificateRequests.filter((r) => r.req.status === 'rejected').length
+                  })`,
+                },
+              ] as const
+            ).map((pill) => (
+              <button
+                key={pill.id}
+                onClick={() => setCertFilter(pill.id)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                  certFilter === pill.id
+                    ? 'bg-[#4B3B8B] text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {pill.label}
+              </button>
+            ))}
+          </div>
+
+          {filteredCertificateRequests.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-slate-200 p-10 text-center space-y-2">
+              <Award className="w-10 h-10 text-slate-300 mx-auto" />
+              <div className="text-sm font-bold text-slate-700">
+                No hay solicitudes de certificado en esta categoría
+              </div>
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                Cuando un estudiante complete el 100% de su curso y presione &quot;Solicitar Certificado&quot;, su expediente aparecerá aquí para validación.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {filteredCertificateRequests.map((item) => {
+                const courseAssignments = item.course.modules.flatMap((m) =>
+                  m.lessons
+                    .filter((l) => l.assignment)
+                    .map((l) => ({
+                      moduleTitle: m.title,
+                      lessonTitle: l.title,
+                      assignment: l.assignment!,
+                      submission: item.prog.assignmentSubmissions?.[l.assignment!.id],
+                    }))
+                );
+                const gradedList = courseAssignments.filter(
+                  (a) => a.submission?.grade !== undefined
+                );
+                const avgGrade =
+                  gradedList.length > 0
+                    ? Math.round(
+                        gradedList.reduce((acc, a) => acc + (a.submission?.grade || 0), 0) /
+                          gradedList.length
+                      )
+                    : null;
+                const simScores = Object.values(item.prog.simulatorScores || {});
+
+                return (
+                  <div
+                    key={item.key}
+                    className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 space-y-4"
+                  >
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-3 border-b border-slate-100">
+                      <div className="flex items-center gap-3.5 min-w-0">
+                        <img
+                          src={item.student.avatar}
+                          alt={item.student.name}
+                          className="w-12 h-12 rounded-full object-cover border border-slate-200 shrink-0"
+                        />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h3 className="text-sm font-extrabold text-slate-900">
+                              {item.student.name}
+                            </h3>
+                            <span
+                              className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                                item.req.status === 'approved'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : item.req.status === 'pending'
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : 'bg-rose-100 text-rose-800'
+                              }`}
+                            >
+                              {item.req.status === 'approved'
+                                ? 'Autorizado y Emitido'
+                                : item.req.status === 'pending'
+                                ? 'Pendiente de Revisión'
+                                : 'Devuelto'}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-500 font-mono">
+                            {item.student.email}
+                            {item.student.institutionalCode
+                              ? ` · DUI/Código: ${item.student.institutionalCode}`
+                              : ''}
+                          </div>
+                          <div className="text-xs font-bold text-[#4B3B8B] mt-0.5">
+                            Curso: {item.course.title} · Avance: {item.percent}%
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="text-xs text-slate-500 space-y-1 shrink-0 md:text-right">
+                        {item.req.requestedAt && (
+                          <div className="flex items-center md:justify-end gap-1">
+                            <Clock className="w-3.5 h-3.5 text-slate-400" />
+                            <span>
+                              Solicitado:{' '}
+                              {new Date(item.req.requestedAt).toLocaleString('es-SV')}
+                            </span>
+                          </div>
+                        )}
+                        {item.req.certificateFolio && (
+                          <div className="font-mono font-bold text-emerald-700">
+                            Folio: {item.req.certificateFolio}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Teacher Grades Audit */}
+                    <div className="bg-[#FAFBFD] border border-slate-200 rounded-xl p-4 space-y-3 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="font-bold text-[#3B2C73] flex items-center gap-1.5">
+                          <FileCheck className="w-4 h-4 text-[#4B3B8B]" />
+                          <span>Calificaciones Registradas por el Docente / Tutor</span>
+                        </div>
+                        <div className="font-mono font-bold text-slate-700">
+                          {avgGrade !== null
+                            ? `Promedio Tareas Calificadas: ${avgGrade}/100`
+                            : 'Sin notas numéricas registradas'}
+                        </div>
+                      </div>
+
+                      {courseAssignments.length > 0 ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                          {courseAssignments.map((a) => (
+                            <div
+                              key={a.assignment.id}
+                              className="p-2.5 bg-white rounded-lg border border-slate-200 space-y-1"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-bold text-slate-800 truncate">
+                                  {a.assignment.title}
+                                </span>
+                                <span
+                                  className={`px-2 py-0.5 rounded font-mono font-bold text-[10px] shrink-0 ${
+                                    a.submission?.grade !== undefined
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : a.submission
+                                      ? 'bg-amber-100 text-amber-800'
+                                      : 'bg-slate-100 text-slate-500'
+                                  }`}
+                                >
+                                  {a.submission?.grade !== undefined
+                                    ? `${a.submission.grade}/100`
+                                    : a.submission
+                                    ? 'Entregada (Sin nota)'
+                                    : 'No entregada'}
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-slate-500 truncate">
+                                {a.moduleTitle} · {a.lessonTitle}
+                              </div>
+                              {a.submission?.feedback && (
+                                <div className="text-[11px] text-slate-600 italic">
+                                  &ldquo;{a.submission.feedback}&rdquo;
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-slate-500">
+                          Este curso no contiene tareas evaluables adicionales.
+                        </p>
+                      )}
+
+                      {simScores.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                          <span className="text-[11px] font-bold text-slate-600">
+                            Simuladores IA:
+                          </span>
+                          {simScores.map((sim) => (
+                            <span
+                              key={sim.simulatorId}
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                sim.passed
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-amber-100 text-amber-800'
+                              }`}
+                            >
+                              {sim.title}: {sim.score}%
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {item.req.status === 'rejected' && item.req.rejectionNote && (
+                      <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800">
+                        <strong>Motivo de devolución:</strong> {item.req.rejectionNote}
+                      </div>
+                    )}
+
+                    {/* Action Buttons */}
+                    <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+                      {item.req.status !== 'approved' && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRejectCertTarget({
+                                studentId: item.studentId,
+                                courseId: item.courseId,
+                                studentName: item.student.name,
+                                courseTitle: item.course.title,
+                              });
+                              setRejectCertNote('');
+                            }}
+                            className="px-3.5 py-2 bg-white border border-rose-200 hover:bg-rose-50 text-rose-700 text-xs font-bold rounded-xl cursor-pointer"
+                          >
+                            Devolver / Rechazar
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              reviewCertificateRequest(
+                                item.studentId,
+                                item.courseId,
+                                'approved'
+                              );
+                              showToast(
+                                `Certificado emitido y autorizado para ${item.student.name}.`
+                              );
+                            }}
+                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                            <span>✅ Emitir / Autorizar Certificado</span>
+                          </button>
+                        </>
+                      )}
+
+                      {item.req.status === 'approved' && (
+                        <span className="text-xs font-bold text-emerald-700 flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4" />
+                          <span>
+                            Autorizado el{' '}
+                            {item.req.reviewedAt
+                              ? new Date(item.req.reviewedAt).toLocaleDateString('es-SV')
+                              : ''}
+                          </span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -1555,7 +2009,7 @@ export const AgapeAdminDashboard: React.FC<AgapeAdminDashboardProps> = ({
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Categoría:</label>
                   <input
@@ -1563,6 +2017,20 @@ export const AgapeAdminDashboard: React.FC<AgapeAdminDashboardProps> = ({
                     value={cCategory}
                     onChange={(e) => setCCategory(e.target.value)}
                     className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Inversión / Costo ($ USD — Solo Admin):
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={cPrice}
+                    onChange={(e) => setCPrice(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono"
                   />
                 </div>
                 <div>
@@ -1937,6 +2405,213 @@ export const AgapeAdminDashboard: React.FC<AgapeAdminDashboardProps> = ({
                     ))
                   )}
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: EDITAR METADATOS Y COSTO DEL CURSO (SOLO ADMINISTRACIÓN) */}
+      {/* ========================================================================= */}
+      {editingCourseModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden flex flex-col max-h-[92vh]">
+            <div className="bg-gradient-to-r from-[#3B2C73] to-[#4B3B8B] p-4 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Edit3 className="w-5 h-5 text-[#F2C94C]" />
+                <h3 className="text-sm font-bold">Editar Curso y Costo Institucional</h3>
+              </div>
+              <button
+                onClick={() => setEditingCourseModal(null)}
+                className="text-white/80 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={handleSaveEditCourseSubmit}
+              className="p-5 space-y-4 text-xs overflow-y-auto"
+            >
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Título del Programa: <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={ecTitle}
+                  onChange={(e) => setEcTitle(e.target.value)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Subtítulo:</label>
+                <input
+                  type="text"
+                  value={ecSubtitle}
+                  onChange={(e) => setEcSubtitle(e.target.value)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Categoría:</label>
+                  <input
+                    type="text"
+                    value={ecCategory}
+                    onChange={(e) => setEcCategory(e.target.value)}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Inversión / Costo ($ USD — Privado Admin):
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={ecPrice}
+                    onChange={(e) => setEcPrice(e.target.value)}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Nivel:</label>
+                  <select
+                    value={ecLevel}
+                    onChange={(e) => setEcLevel(e.target.value as CourseLevel)}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                  >
+                    <option value="Principiante">Principiante</option>
+                    <option value="Intermedio">Intermedio</option>
+                    <option value="Avanzado">Avanzado</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Estado:</label>
+                  <select
+                    value={ecStatus}
+                    onChange={(e) => setEcStatus(e.target.value as CourseStatus)}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                  >
+                    <option value="Publicado">Activo (Publicado)</option>
+                    <option value="Borrador">Borrador</option>
+                    <option value="En revisión">En revisión</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Descripción:</label>
+                <textarea
+                  rows={3}
+                  value={ecDescription}
+                  onChange={(e) => setEcDescription(e.target.value)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Imagen de Portada:</label>
+                <div className="flex items-center gap-3">
+                  <img
+                    src={ecCoverImage}
+                    alt="Portada"
+                    className="w-24 h-16 rounded-lg object-cover border border-slate-200 shrink-0"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => editCourseCoverInputRef.current?.click()}
+                    className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Cambiar Portada</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setEditingCourseModal(null)}
+                  className="px-4 py-2 bg-slate-100 text-slate-700 font-semibold rounded-lg cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-[#4B3B8B] text-white font-bold rounded-lg cursor-pointer"
+                >
+                  Guardar Cambios
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: DEVOLVER / RECHAZAR SOLICITUD DE CERTIFICADO */}
+      {/* ========================================================================= */}
+      {rejectCertTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden">
+            <div className="bg-rose-700 p-4 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-200" />
+                <h3 className="text-sm font-bold">Devolver Solicitud de Certificado</h3>
+              </div>
+              <button
+                onClick={() => setRejectCertTarget(null)}
+                className="text-white/80 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3 text-xs">
+              <p className="text-slate-700">
+                Indica el motivo por el cual se devuelve la solicitud de{' '}
+                <strong>{rejectCertTarget.studentName}</strong> para el curso{' '}
+                <strong>{rejectCertTarget.courseTitle}</strong>:
+              </p>
+              <textarea
+                rows={3}
+                value={rejectCertNote}
+                onChange={(e) => setRejectCertNote(e.target.value)}
+                placeholder="Ej. Pendiente completar calificación de tarea práctica del Módulo 2..."
+                className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+              />
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setRejectCertTarget(null)}
+                  className="px-3.5 py-2 bg-slate-100 text-slate-700 font-semibold rounded-lg cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    reviewCertificateRequest(
+                      rejectCertTarget.studentId,
+                      rejectCertTarget.courseId,
+                      'rejected',
+                      rejectCertNote.trim() || 'Revisar observaciones con tu docente.'
+                    );
+                    showToast(
+                      `Solicitud de ${rejectCertTarget.studentName} devuelta con observaciones.`
+                    );
+                    setRejectCertTarget(null);
+                  }}
+                  className="px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white font-bold rounded-lg cursor-pointer"
+                >
+                  Confirmar Devolución
+                </button>
               </div>
             </div>
           </div>

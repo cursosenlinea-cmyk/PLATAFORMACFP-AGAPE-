@@ -165,13 +165,16 @@ const AgapeLmsWorkspace: React.FC = () => {
           {role === 'admin' &&
             (currentTab === 'admin-users' ||
               currentTab === 'admin-courses' ||
-              currentTab === 'simulators') && (
+              currentTab === 'simulators' ||
+              currentTab === 'admin-certificates') && (
               <AgapeAdminDashboard
                 initialTab={
                   currentTab === 'admin-courses'
                     ? 'courses'
                     : currentTab === 'simulators'
                     ? 'simulators'
+                    : currentTab === 'admin-certificates'
+                    ? 'certificates'
                     : 'users'
                 }
                 onNavigateToCourseEdit={(cId) => {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useId } from 'react';
 import { Film, ExternalLink } from 'lucide-react';
 
 interface VideoPlayerProps {
@@ -9,11 +9,31 @@ interface VideoPlayerProps {
   className?: string;
 }
 
-const getYouTubeEmbedUrl = (url?: string): string | null => {
+declare global {
+  interface Window {
+    YT?: {
+      Player: new (
+        el: string | HTMLElement,
+        opts: {
+          videoId: string;
+          playerVars?: Record<string, string | number>;
+          events?: {
+            onStateChange?: (event: { data: number }) => void;
+          };
+        }
+      ) => { destroy: () => void };
+      PlayerState?: { ENDED: number };
+    };
+    onYouTubeIframeAPIReady?: () => void;
+    _agapeYtCallbacks?: Array<() => void>;
+  }
+}
+
+const getYouTubeVideoId = (url?: string): string | null => {
   if (!url) return null;
-  const ytRegex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i;
+  const ytRegex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i;
   const match = url.match(ytRegex);
-  return match ? `https://www.youtube.com/embed/${match[1]}?autoplay=0&rel=0` : null;
+  return match ? match[1] : null;
 };
 
 const getVimeoEmbedUrl = (url?: string): string | null => {
@@ -23,6 +43,31 @@ const getVimeoEmbedUrl = (url?: string): string | null => {
   return match ? `https://player.vimeo.com/video/${match[1]}` : null;
 };
 
+function loadYouTubeIframeAPI(callback: () => void) {
+  if (typeof window === 'undefined') return;
+  if (window.YT && window.YT.Player) {
+    callback();
+    return;
+  }
+  window._agapeYtCallbacks = window._agapeYtCallbacks || [];
+  window._agapeYtCallbacks.push(callback);
+
+  const existingScript = document.querySelector('script[src="https://www.youtube.com/iframe_api"]');
+  if (!existingScript) {
+    const prevReady = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => {
+      if (typeof prevReady === 'function') prevReady();
+      const cbs = window._agapeYtCallbacks || [];
+      window._agapeYtCallbacks = [];
+      cbs.forEach((fn) => fn());
+    };
+    const tag = document.createElement('script');
+    tag.src = 'https://www.youtube.com/iframe_api';
+    tag.async = true;
+    document.head.appendChild(tag);
+  }
+}
+
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   src,
   poster,
@@ -31,24 +76,85 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   className = '',
 }) => {
   const [hasError, setHasError] = useState<boolean>(false);
+  const [ytApiReady, setYtApiReady] = useState<boolean>(false);
+  const onEndedRef = useRef(onEnded);
+  onEndedRef.current = onEnded;
 
-  const youtubeEmbedUrl = getYouTubeEmbedUrl(src);
+  const reactId = useId().replace(/:/g, '');
+  const ytContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const youtubeVideoId = getYouTubeVideoId(src);
   const vimeoEmbedUrl = getVimeoEmbedUrl(src);
 
   useEffect(() => {
     setHasError(false);
   }, [src]);
 
-  if (youtubeEmbedUrl) {
+  useEffect(() => {
+    if (!youtubeVideoId) {
+      setYtApiReady(false);
+      return;
+    }
+
+    let cancelled = false;
+    let playerInstance: { destroy: () => void } | null = null;
+
+    loadYouTubeIframeAPI(() => {
+      if (cancelled || !ytContainerRef.current || !window.YT?.Player) return;
+      try {
+        playerInstance = new window.YT.Player(ytContainerRef.current, {
+          videoId: youtubeVideoId,
+          playerVars: {
+            autoplay: 0,
+            rel: 0,
+            modestbranding: 1,
+            enablejsapi: 1,
+            origin: window.location.origin,
+          },
+          events: {
+            onStateChange: (event: { data: number }) => {
+              // 0 === YT.PlayerState.ENDED
+              if (event.data === 0) {
+                onEndedRef.current?.();
+              }
+            },
+          },
+        });
+        setYtApiReady(true);
+      } catch {
+        setYtApiReady(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      if (playerInstance) {
+        try {
+          playerInstance.destroy();
+        } catch {
+          // ignore destroy errors
+        }
+      }
+    };
+  }, [youtubeVideoId]);
+
+  if (youtubeVideoId) {
     return (
       <div className={`relative bg-slate-950 rounded-xl overflow-hidden shadow-md aspect-video w-full ${className}`}>
-        <iframe
-          src={youtubeEmbedUrl}
-          title={title || 'Video de la lección'}
-          className="w-full h-full border-0"
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-          allowFullScreen
+        <div
+          id={`yt-player-${reactId}`}
+          ref={ytContainerRef}
+          className="w-full h-full"
         />
+        {!ytApiReady && (
+          <iframe
+            src={`https://www.youtube.com/embed/${youtubeVideoId}?autoplay=0&rel=0&enablejsapi=1`}
+            title={title || 'Video de la lección'}
+            className="absolute inset-0 w-full h-full border-0"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowFullScreen
+          />
+        )}
       </div>
     );
   }

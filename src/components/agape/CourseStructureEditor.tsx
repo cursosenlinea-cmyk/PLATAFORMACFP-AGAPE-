@@ -24,8 +24,19 @@ import {
   Eye,
   Table2,
   Presentation,
+  ExternalLink,
+  X,
+  Calendar,
 } from 'lucide-react';
-import { Course, Lesson, ResourceItem, QuizQuestion, DocCategory } from '../../types/lms';
+import {
+  Course,
+  CourseLevel,
+  Lesson,
+  ResourceItem,
+  QuizQuestion,
+  DocCategory,
+  AssignmentDeliveryType,
+} from '../../types/lms';
 import { useLms } from '../../context/LmsContext';
 import { VideoPlayer } from '../common/VideoPlayer';
 import { DocumentPreviewModal } from '../common/DocumentPreviewModal';
@@ -47,8 +58,10 @@ export const CourseStructureEditor: React.FC<CourseStructureEditorProps> = ({ co
     updateLesson,
     deleteLesson,
     addResource,
+    updateResource,
     deleteResource,
     saveQuiz,
+    saveAssignment,
     deleteSimulatorLab,
     generateLessonExplanationAI,
     generatePracticeAI,
@@ -105,10 +118,11 @@ export const CourseStructureEditor: React.FC<CourseStructureEditorProps> = ({ co
       : ''
   );
 
-  // Cloud Document Linking & Preview States
+  // Cloud Document Linking, Editing & Preview States
   const [cloudLinkCategory, setCloudLinkCategory] = useState<DocCategory | null>(null);
   const [cloudLinkTitle, setCloudLinkTitle] = useState<string>('');
   const [cloudLinkUrl, setCloudLinkUrl] = useState<string>('');
+  const [editingResourceId, setEditingResourceId] = useState<string | null>(null);
   const [previewDoc, setPreviewDoc] = useState<{
     title: string;
     url: string;
@@ -142,18 +156,54 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
 
   // Assignment notes / Detalle de asignación
   const [assignmentNotes, setAssignmentNotes] = useState<string>(
-    activeLesson?.assignment?.description ||
-      'Detalle de asignación técnica del curso'
+    activeLesson?.assignment?.description || ''
   );
 
-  // General course metadata for other tabs
+  // General course metadata for Info General tab
   const [courseTitle, setCourseTitle] = useState<string>(course.title);
+  const [courseSubtitle, setCourseSubtitle] = useState<string>(course.subtitle || '');
   const [courseCategory, setCourseCategory] = useState<string>(course.category);
+  const [courseLevel, setCourseLevel] = useState<CourseLevel>(course.level);
+  const [courseDescription, setCourseDescription] = useState<string>(course.description || '');
   const [coursePrice, setCoursePrice] = useState<number>(course.price);
 
   // Modals
   const [isInstructorModalOpen, setIsInstructorModalOpen] = useState<boolean>(false);
   const [isSimulatorModalOpen, setIsSimulatorModalOpen] = useState<boolean>(false);
+
+  // Module Edit Modal State
+  const [editingModuleModal, setEditingModuleModal] = useState<{
+    id: string;
+    title: string;
+    description: string;
+  } | null>(null);
+
+  // Lesson Create / Edit Modal State
+  const [lessonModal, setLessonModal] = useState<{
+    mode: 'create' | 'edit';
+    moduleId: string;
+    lessonId?: string;
+    title: string;
+    summary: string;
+    durationMinutes: number;
+  } | null>(null);
+
+  // Assignment Create / Edit Modal State
+  const [showAssignmentModal, setShowAssignmentModal] = useState<boolean>(false);
+  const [assignTitle, setAssignTitle] = useState<string>('');
+  const [assignInstructions, setAssignInstructions] = useState<string>('');
+  const [assignDueDate, setAssignDueDate] = useState<string>('2026-11-30');
+  const [assignMaxPoints, setAssignMaxPoints] = useState<number>(100);
+  const [assignDeliveryType, setAssignDeliveryType] = useState<AssignmentDeliveryType>('both');
+
+  // Quiz Create / Edit Modal State
+  const [showQuizModal, setShowQuizModal] = useState<boolean>(false);
+  const [quizTitle, setQuizTitle] = useState<string>('Evaluación Rápida de Conocimientos');
+  const [quizPassingScore, setQuizPassingScore] = useState<number>(70);
+  const [quizQuestionText, setQuizQuestionText] = useState<string>('');
+  const [quizOptions, setQuizOptions] = useState<string[]>(['', '', '', '']);
+  const [quizCorrectIdx, setQuizCorrectIdx] = useState<number>(0);
+  const [quizExplanation, setQuizExplanation] = useState<string>('');
 
   // In-place dynamic module creation state
   const [isCreatingModule, setIsCreatingModule] = useState<boolean>(false);
@@ -186,11 +236,16 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
     setExternalUrlInput(
       firstLes?.videoUrl && !firstLes.videoUrl.startsWith('blob:') ? firstLes.videoUrl : ''
     );
-    setAssignmentNotes(firstLes?.assignment?.description || 'Detalle de asignación técnica del curso');
+    setAssignmentNotes(firstLes?.assignment?.description || '');
     setCourseTitle(course.title);
+    setCourseSubtitle(course.subtitle || '');
     setCourseCategory(course.category);
+    setCourseLevel(course.level);
+    setCourseDescription(course.description || '');
     setCoursePrice(course.price);
     setShowVideoPreview(false);
+    setCloudLinkCategory(null);
+    setEditingResourceId(null);
   }, [course.id]);
 
   // Switch active lesson & sync buffers
@@ -203,9 +258,15 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
         videoUrl,
         videoFileName,
         videoFileSize: videoFileSize || undefined,
-        assignment: activeLesson?.assignment
-          ? { ...activeLesson.assignment, description: assignmentNotes }
-          : undefined,
+        ...(activeLesson?.assignment
+          ? {
+              assignment: {
+                ...activeLesson.assignment,
+                description: assignmentNotes || activeLesson.assignment.description,
+                instructions: assignmentNotes || activeLesson.assignment.instructions,
+              },
+            }
+          : {}),
       });
     }
 
@@ -217,8 +278,10 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
     setVideoFileName(les.videoFileName || 'clase_video_hd.mp4');
     setVideoFileSize(les.videoFileSize || '');
     setExternalUrlInput(les.videoUrl && !les.videoUrl.startsWith('blob:') ? les.videoUrl : '');
-    setAssignmentNotes(les.assignment?.description || 'Detalle de asignación en formación técnica');
+    setAssignmentNotes(les.assignment?.description || '');
     setShowVideoPreview(false);
+    setCloudLinkCategory(null);
+    setEditingResourceId(null);
   };
 
   // File input refs for real browser uploads
@@ -424,6 +487,8 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
         ? 'Hoja de Cálculo en la Nube'
         : cloudLinkCategory === 'presentation'
         ? 'Presentación de Clase'
+        : cloudLinkCategory === 'other'
+        ? 'Enlace Web de Apoyo'
         : 'Documento Técnico en la Nube';
     const title = cloudLinkTitle.trim() || defaultTitle;
     const isGoogle = /docs\.google\.com|drive\.google\.com/i.test(cleanUrl);
@@ -438,32 +503,52 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
         ? isGoogle
           ? 'gslides'
           : 'ppt'
+        : cloudLinkCategory === 'other' && !isGoogle && !isOneDrive
+        ? 'link'
         : isGoogle
         ? 'gdoc'
         : 'doc';
 
-    addResource(course.id, activeModuleId, activeLessonId, {
+    const resourcePayload: Omit<ResourceItem, 'id'> = {
       title,
       type: resType,
-      size: isGoogle ? 'Google Workspace' : isOneDrive ? 'OneDrive' : 'Enlace Cloud',
+      size: isGoogle ? 'Google Workspace' : isOneDrive ? 'OneDrive' : 'Enlace Web',
       url: cleanUrl,
       docCategory: cloudLinkCategory,
       provider: isGoogle ? 'google' : isOneDrive ? 'onedrive' : 'external',
       description: 'Recurso en la nube vinculado para visualización integrada.',
-    });
+    };
+
+    if (editingResourceId) {
+      updateResource(course.id, activeModuleId, activeLessonId, editingResourceId, resourcePayload);
+      showToast(`Enlace "${title}" actualizado correctamente.`);
+    } else {
+      addResource(course.id, activeModuleId, activeLessonId, resourcePayload);
+      showToast(`Recurso "${title}" vinculado correctamente.`);
+    }
 
     setCloudLinkCategory(null);
     setCloudLinkTitle('');
     setCloudLinkUrl('');
-    showToast(`Recurso "${title}" vinculado correctamente.`);
+    setEditingResourceId(null);
+  };
+
+  const openEditCloudLink = (res: ResourceItem) => {
+    setEditingResourceId(res.id);
+    setCloudLinkCategory(res.docCategory || (res.type === 'link' ? 'other' : 'document'));
+    setCloudLinkTitle(res.title);
+    setCloudLinkUrl(res.url === '#' ? '' : res.url);
   };
 
   const handleDownloadOrOpenResource = (res: ResourceItem) => {
     if (res.url && res.url !== '#') {
       const a = document.createElement('a');
       a.href = res.url;
-      a.download = res.title;
+      if (res.provider === 'file' || res.url.startsWith('blob:') || res.url.startsWith('data:')) {
+        a.download = res.title;
+      }
       a.target = '_blank';
+      a.rel = 'noopener noreferrer';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -481,51 +566,88 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
     }
   };
 
+  const openAssignmentModal = () => {
+    const current = activeLesson?.assignment;
+    setAssignTitle(current?.title || `Tarea Práctica: ${lessonTitle}`);
+    setAssignInstructions(current?.instructions || current?.description || assignmentNotes || '');
+    setAssignDueDate(current?.dueDate || '2026-11-30');
+    setAssignMaxPoints(current?.maxPoints || 100);
+    setAssignDeliveryType(current?.deliveryType || 'both');
+    setShowAssignmentModal(true);
+  };
+
+  const handleSaveAssignmentModal = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeModuleId || !activeLessonId || !assignTitle.trim()) return;
+    const cleanInstructions = assignInstructions.trim() || 'Completar la práctica y adjuntar evidencia.';
+    saveAssignment(course.id, activeModuleId, activeLessonId, {
+      id: activeLesson?.assignment?.id || 'assign-' + activeLessonId,
+      title: assignTitle.trim(),
+      description: cleanInstructions,
+      instructions: cleanInstructions,
+      maxPoints: Math.max(1, Math.min(100, Number(assignMaxPoints) || 100)),
+      dueDate: assignDueDate || '2026-11-30',
+      deliveryType: assignDeliveryType,
+    });
+    setAssignmentNotes(cleanInstructions);
+    setShowAssignmentModal(false);
+    showToast(`Tarea "${assignTitle.trim()}" guardada y sincronizada.`);
+  };
+
   const handleAddQuiz = () => {
-    const qText = prompt('Pregunta para el nuevo Quiz:', '¿Cuál es la función principal de un resistor en un circuito?');
-    if (qText && activeModuleId && activeLessonId) {
-      const q: QuizQuestion = {
-        id: 'q-' + Date.now(),
-        question: qText,
-        options: [
-          'Limitar el flujo de corriente eléctrica',
-          'Almacenar carga electrostática',
-          'Generar corriente alterna',
-          'Aumentar el voltaje sin pérdida',
-        ],
-        correctOptionIndex: 0,
-        explanation: 'Los resistores limitan y controlan la intensidad de corriente en una rama de circuito.',
-      };
-
-      saveQuiz(course.id, activeModuleId, activeLessonId, {
-        id: 'quiz-' + Date.now(),
-        title: 'Evaluación Rápida de Componentes',
-        passingScore: 70,
-        questions: [q],
-      });
-      showToast('Quiz interactivo creado con éxito.');
-    }
-  };
-
-  // Unlimited Modules & Lessons
-  const handleAddModule = () => {
-    const modNumber = course.modules.length + 1;
-    const modTitle = prompt(
-      'Nombre del nuevo módulo:',
-      `Módulo ${modNumber}: Control y Automatización`
+    const existing = activeLesson?.quiz;
+    const firstQ = existing?.questions?.[0];
+    setQuizTitle(existing?.title || `Evaluación: ${lessonTitle}`);
+    setQuizPassingScore(existing?.passingScore || 70);
+    setQuizQuestionText(
+      firstQ?.question || '¿Cuál es el procedimiento técnico correcto en esta lección?'
     );
-    if (modTitle && modTitle.trim()) {
-      addModule(course.id, modTitle.trim(), 'Módulo de formación especializada en CFP AGAPE.');
-      showToast(`Módulo "${modTitle.trim()}" agregado dinámicamente.`);
-    }
+    setQuizOptions(
+      firstQ?.options && firstQ.options.length >= 4
+        ? [...firstQ.options.slice(0, 4)]
+        : [
+            'Aplicar el protocolo de seguridad y medición verificada',
+            'Omitir la calibración inicial del equipo',
+            'Energizar sin comprobar polaridad o conexiones',
+            'Ninguna de las anteriores',
+          ]
+    );
+    setQuizCorrectIdx(firstQ?.correctOptionIndex ?? 0);
+    setQuizExplanation(
+      firstQ?.explanation || 'Verificar seguridad y protocolo técnico garantiza un resultado óptimo.'
+    );
+    setShowQuizModal(true);
   };
 
-  const handleRenameModule = (modId: string, currentTitle: string) => {
-    const newTitle = prompt('Editar nombre del módulo:', currentTitle);
-    if (newTitle && newTitle.trim()) {
-      updateModule(course.id, modId, { title: newTitle.trim() });
-      showToast(`Módulo renombrado a "${newTitle.trim()}".`);
-    }
+  const handleSaveQuizModal = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeModuleId || !activeLessonId || !quizQuestionText.trim()) return;
+    const existing = activeLesson?.quiz;
+    const q: QuizQuestion = {
+      id: existing?.questions?.[0]?.id || 'q-' + Date.now(),
+      question: quizQuestionText.trim(),
+      options: quizOptions.map((o, idx) => o.trim() || `Opción ${idx + 1}`),
+      correctOptionIndex: quizCorrectIdx,
+      explanation: quizExplanation.trim() || 'Respuesta verificada según normativa CFP ÁGAPE.',
+    };
+    const otherQuestions = existing?.questions?.slice(1) || [];
+    saveQuiz(course.id, activeModuleId, activeLessonId, {
+      id: existing?.id || 'quiz-' + Date.now(),
+      title: quizTitle.trim() || 'Evaluación Rápida',
+      passingScore: Math.max(10, Math.min(100, Number(quizPassingScore) || 70)),
+      questions: [q, ...otherQuestions],
+    });
+    setShowQuizModal(false);
+    showToast('Quiz interactivo guardado con éxito.');
+  };
+
+  // Unlimited Modules & Lessons (Modal-based, no window.prompt)
+  const handleRenameModule = (modId: string, currentTitle: string, currentDesc = '') => {
+    setEditingModuleModal({
+      id: modId,
+      title: currentTitle,
+      description: currentDesc,
+    });
   };
 
   const handleDeleteModuleConfirm = (modId: string, title: string) => {
@@ -542,20 +664,57 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
   const handleAddLesson = (moduleId: string) => {
     const mod = course.modules.find((m) => m.id === moduleId);
     const lesNum = (mod?.lessons.length || 0) + 1;
-    const lesTitle = prompt('Título de la nueva lección/clase:', `Lección ${lesNum}: Procedimiento Técnico`);
-    if (lesTitle && lesTitle.trim()) {
-      addLesson(course.id, moduleId, {
-        title: lesTitle.trim(),
-        summary: 'Contenido técnico de la clase.',
-        durationMinutes: 20,
+    setLessonModal({
+      mode: 'create',
+      moduleId,
+      title: `Lección ${lesNum}: Procedimiento Técnico`,
+      summary: 'Contenido técnico de la clase.',
+      durationMinutes: 20,
+    });
+  };
+
+  const openEditLessonModal = (moduleId: string, les: Lesson) => {
+    setLessonModal({
+      mode: 'edit',
+      moduleId,
+      lessonId: les.id,
+      title: les.id === activeLessonId ? lessonTitle : les.title,
+      summary: les.summary || '',
+      durationMinutes: les.durationMinutes || 20,
+    });
+  };
+
+  const handleSaveLessonModal = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!lessonModal || !lessonModal.title.trim()) return;
+    if (lessonModal.mode === 'create') {
+      const created = addLesson(course.id, lessonModal.moduleId, {
+        title: lessonModal.title.trim(),
+        summary: lessonModal.summary.trim() || 'Contenido técnico de la clase.',
+        durationMinutes: Math.max(1, Number(lessonModal.durationMinutes) || 20),
         type: 'video',
         videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
         videoFileName: 'clase_video_hd.mp4',
-        explanationText: `OBJETIVOS DE APRENDIZAJE:\n1. Conocer los fundamentos de ${lesTitle.trim()}.\n2. Realizar las pruebas en el taller del CFP AGAPE.`,
+        explanationText: `OBJETIVOS DE APRENDIZAJE:\n1. Conocer los fundamentos de ${lessonModal.title.trim()}.\n2. Realizar las pruebas en el taller del CFP AGAPE.`,
         resources: [],
       });
-      showToast(`Lección "${lesTitle.trim()}" creada con éxito.`);
+      setActiveModuleId(lessonModal.moduleId);
+      setActiveLessonId(created.id);
+      setLessonTitle(created.title);
+      setExplanationText(created.explanationText || '');
+      showToast(`Lección "${lessonModal.title.trim()}" creada con éxito.`);
+    } else if (lessonModal.lessonId) {
+      updateLesson(course.id, lessonModal.moduleId, lessonModal.lessonId, {
+        title: lessonModal.title.trim(),
+        summary: lessonModal.summary.trim() || 'Contenido técnico de la clase.',
+        durationMinutes: Math.max(1, Number(lessonModal.durationMinutes) || 20),
+      });
+      if (lessonModal.lessonId === activeLessonId) {
+        setLessonTitle(lessonModal.title.trim());
+      }
+      showToast(`Lección "${lessonModal.title.trim()}" actualizada.`);
     }
+    setLessonModal(null);
   };
 
   const handleDeleteLessonConfirm = (modId: string, lesId: string, title: string) => {
@@ -591,14 +750,15 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
         videoUrl,
         videoFileName,
         videoFileSize: videoFileSize || undefined,
-        assignment: {
-          id: 'assign-' + activeLessonId,
-          title: 'Detalle de asignación en formación técnica',
-          description: assignmentNotes,
-          instructions: 'Completar la práctica de taller y subir reporte.',
-          maxPoints: 100,
-          dueDate: '2026-11-20',
-        },
+        ...(activeLesson?.assignment
+          ? {
+              assignment: {
+                ...activeLesson.assignment,
+                description: assignmentNotes || activeLesson.assignment.description,
+                instructions: assignmentNotes || activeLesson.assignment.instructions,
+              },
+            }
+          : {}),
       });
     }
 
@@ -606,7 +766,7 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
       status: 'Borrador',
       title: courseTitle,
     });
-    showToast('Borrador guardado: Explicación teórica, videos y docente sincronizados.');
+    showToast('Borrador guardado: Explicación teórica, videos y estructura sincronizados.');
   };
 
   // Dynamic Persistence: Publicar
@@ -618,14 +778,15 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
         videoUrl,
         videoFileName,
         videoFileSize: videoFileSize || undefined,
-        assignment: {
-          id: 'assign-' + activeLessonId,
-          title: 'Detalle de asignación en formación técnica',
-          description: assignmentNotes,
-          instructions: 'Completar la práctica de taller y subir reporte.',
-          maxPoints: 100,
-          dueDate: '2026-11-20',
-        },
+        ...(activeLesson?.assignment
+          ? {
+              assignment: {
+                ...activeLesson.assignment,
+                description: assignmentNotes || activeLesson.assignment.description,
+                instructions: assignmentNotes || activeLesson.assignment.instructions,
+              },
+            }
+          : {}),
       });
     }
 
@@ -724,6 +885,368 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
           url={previewDoc.url}
           category={previewDoc.category}
         />
+      )}
+
+      {/* Modal: Editar Módulo */}
+      {editingModuleModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden">
+            <div className="bg-[#3B2C73] p-4 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Edit2 className="w-4 h-4 text-[#F2C94C]" />
+                <h3 className="text-sm font-bold">Editar Módulo del Curso</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingModuleModal(null)}
+                className="text-white/80 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!editingModuleModal.title.trim()) return;
+                updateModule(course.id, editingModuleModal.id, {
+                  title: editingModuleModal.title.trim(),
+                  description: editingModuleModal.description.trim(),
+                });
+                showToast(`Módulo "${editingModuleModal.title.trim()}" actualizado.`);
+                setEditingModuleModal(null);
+              }}
+              className="p-5 space-y-3 text-xs"
+            >
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Título del Módulo:</label>
+                <input
+                  type="text"
+                  required
+                  value={editingModuleModal.title}
+                  onChange={(e) =>
+                    setEditingModuleModal((prev) => (prev ? { ...prev, title: e.target.value } : null))
+                  }
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-semibold"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Descripción:</label>
+                <textarea
+                  rows={2}
+                  value={editingModuleModal.description}
+                  onChange={(e) =>
+                    setEditingModuleModal((prev) =>
+                      prev ? { ...prev, description: e.target.value } : null
+                    )
+                  }
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setEditingModuleModal(null)}
+                  className="px-4 py-2 bg-slate-100 text-slate-700 font-semibold rounded-lg cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-[#4B3B8B] text-white font-bold rounded-lg cursor-pointer"
+                >
+                  Guardar Cambios
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Crear / Editar Lección */}
+      {lessonModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden">
+            <div className="bg-[#3B2C73] p-4 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <BookOpen className="w-4 h-4 text-[#F2C94C]" />
+                <h3 className="text-sm font-bold">
+                  {lessonModal.mode === 'create' ? 'Nueva Lección / Clase' : 'Editar Lección'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLessonModal(null)}
+                className="text-white/80 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleSaveLessonModal} className="p-5 space-y-3 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Título de la Lección:</label>
+                <input
+                  type="text"
+                  required
+                  value={lessonModal.title}
+                  onChange={(e) =>
+                    setLessonModal((prev) => (prev ? { ...prev, title: e.target.value } : null))
+                  }
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-semibold"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Resumen / Objetivo breve:</label>
+                <textarea
+                  rows={2}
+                  value={lessonModal.summary}
+                  onChange={(e) =>
+                    setLessonModal((prev) => (prev ? { ...prev, summary: e.target.value } : null))
+                  }
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Duración estimada (minutos):</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={300}
+                  value={lessonModal.durationMinutes}
+                  onChange={(e) =>
+                    setLessonModal((prev) =>
+                      prev ? { ...prev, durationMinutes: Number(e.target.value) } : null
+                    )
+                  }
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setLessonModal(null)}
+                  className="px-4 py-2 bg-slate-100 text-slate-700 font-semibold rounded-lg cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-[#4B3B8B] text-white font-bold rounded-lg cursor-pointer"
+                >
+                  {lessonModal.mode === 'create' ? 'Crear Lección' : 'Guardar Cambios'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Añadir / Editar Tarea */}
+      {showAssignmentModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden">
+            <div className="bg-gradient-to-r from-[#3B2C73] to-[#4B3B8B] p-4 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FileText className="w-4 h-4 text-[#F2C94C]" />
+                <h3 className="text-sm font-bold">
+                  {activeLesson?.assignment ? 'Editar Tarea Práctica' : 'Añadir Nueva Tarea Práctica'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAssignmentModal(false)}
+                className="text-white/80 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleSaveAssignmentModal} className="p-5 space-y-3.5 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Título de la Tarea: <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={assignTitle}
+                  onChange={(e) => setAssignTitle(e.target.value)}
+                  placeholder="Ej. Reporte de Medición de Resistencias"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Instrucciones detalladas para el estudiante: <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  rows={4}
+                  required
+                  value={assignInstructions}
+                  onChange={(e) => setAssignInstructions(e.target.value)}
+                  placeholder="Describe paso a paso lo que el alumno debe realizar y entregar..."
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Fecha Límite:</label>
+                  <input
+                    type="date"
+                    value={assignDueDate}
+                    onChange={(e) => setAssignDueDate(e.target.value)}
+                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Ponderación (Pts):</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={assignMaxPoints}
+                    onChange={(e) => setAssignMaxPoints(Number(e.target.value))}
+                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Tipo de Entrega:</label>
+                  <select
+                    value={assignDeliveryType}
+                    onChange={(e) => setAssignDeliveryType(e.target.value as AssignmentDeliveryType)}
+                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-semibold"
+                  >
+                    <option value="both">Subir archivo o pegar enlace</option>
+                    <option value="file">Solo subir archivo</option>
+                    <option value="link">Solo pegar enlace</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowAssignmentModal(false)}
+                  className="px-4 py-2 bg-slate-100 text-slate-700 font-semibold rounded-lg cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-[#4B3B8B] hover:bg-[#3B2D73] text-white font-bold rounded-lg cursor-pointer"
+                >
+                  Guardar Tarea
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Crear / Editar Quiz */}
+      {showQuizModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden">
+            <div className="bg-[#3B2C73] p-4 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-[#F2C94C]" />
+                <h3 className="text-sm font-bold">
+                  {activeLesson?.quiz ? 'Editar Quiz de la Lección' : 'Crear Quiz Interactivo'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowQuizModal(false)}
+                className="text-white/80 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleSaveQuizModal} className="p-5 space-y-3 text-xs max-h-[82vh] overflow-y-auto">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-2">
+                  <label className="block font-bold text-slate-700 mb-1">Título del Quiz:</label>
+                  <input
+                    type="text"
+                    required
+                    value={quizTitle}
+                    onChange={(e) => setQuizTitle(e.target.value)}
+                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-semibold"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Nota mínima (%):</label>
+                  <input
+                    type="number"
+                    min={10}
+                    max={100}
+                    value={quizPassingScore}
+                    onChange={(e) => setQuizPassingScore(Number(e.target.value))}
+                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Pregunta:</label>
+                <textarea
+                  rows={2}
+                  required
+                  value={quizQuestionText}
+                  onChange={(e) => setQuizQuestionText(e.target.value)}
+                  className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="block font-bold text-slate-700">Opciones (marca la correcta):</label>
+                {quizOptions.map((opt, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="quizCorrect"
+                      checked={quizCorrectIdx === idx}
+                      onChange={() => setQuizCorrectIdx(idx)}
+                      className="text-[#4B3B8B]"
+                    />
+                    <input
+                      type="text"
+                      value={opt}
+                      onChange={(e) => {
+                        const next = [...quizOptions];
+                        next[idx] = e.target.value;
+                        setQuizOptions(next);
+                      }}
+                      className="flex-1 p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                    />
+                  </div>
+                ))}
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Explicación técnica:</label>
+                <input
+                  type="text"
+                  value={quizExplanation}
+                  onChange={(e) => setQuizExplanation(e.target.value)}
+                  className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowQuizModal(false)}
+                  className="px-4 py-2 bg-slate-100 text-slate-700 font-semibold rounded-lg cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-[#4B3B8B] text-white font-bold rounded-lg cursor-pointer"
+                >
+                  Guardar Quiz
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
       {/* Main White Content Card */}
@@ -941,10 +1464,10 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleRenameModule(mod.id, mod.title);
+                            handleRenameModule(mod.id, mod.title, mod.description);
                           }}
                           className="p-1 hover:bg-white/20 text-white/90 rounded text-xs transition-colors cursor-pointer"
-                          title="Renombrar módulo"
+                          title="Editar módulo"
                         >
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
@@ -1013,6 +1536,20 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
                                 </div>
 
                                 <div className="flex items-center gap-2">
+                                  {/* Edit lesson button */}
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openEditLessonModal(mod.id, les);
+                                    }}
+                                    className="px-2 py-1 hover:bg-white text-slate-600 hover:text-[#4B3B8B] rounded text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                                    title="Editar lección"
+                                  >
+                                    <Edit2 className="w-3 h-3" />
+                                    <span className="hidden sm:inline">Editar</span>
+                                  </button>
+
                                   {/* Delete lesson button */}
                                   <button
                                     type="button"
@@ -1331,15 +1868,14 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
                                           try {
                                             const practice = await generatePracticeAI(lessonTitle, mod.title, course.title);
                                             setAssignmentNotes(practice);
-                                            updateLesson(course.id, mod.id, les.id, {
-                                              assignment: {
-                                                id: 'assign-' + les.id,
-                                                title: 'Práctica de Taller: ' + lessonTitle,
-                                                description: practice,
-                                                instructions: 'Realizar montaje y subir reporte de mediciones.',
-                                                maxPoints: 100,
-                                                dueDate: '2026-11-20',
-                                              },
+                                            saveAssignment(course.id, mod.id, les.id, {
+                                              id: les.assignment?.id || 'assign-' + les.id,
+                                              title: les.assignment?.title || 'Práctica de Taller: ' + lessonTitle,
+                                              description: practice,
+                                              instructions: practice,
+                                              maxPoints: les.assignment?.maxPoints || 100,
+                                              dueDate: les.assignment?.dueDate || '2026-11-30',
+                                              deliveryType: les.assignment?.deliveryType || 'both',
                                             });
                                             showToast('¡Actividad práctica de taller generada con IA!');
                                           } finally {
@@ -1364,7 +1900,12 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
 
                                       <button
                                         type="button"
-                                        onClick={() => setCloudLinkCategory('document')}
+                                        onClick={() => {
+                                          setEditingResourceId(null);
+                                          setCloudLinkTitle('');
+                                          setCloudLinkUrl('');
+                                          setCloudLinkCategory('document');
+                                        }}
                                         className="px-3 py-1.5 bg-white border border-sky-200 hover:bg-sky-50 text-sky-900 text-xs font-semibold rounded-lg shadow-2xs flex items-center gap-1.5 transition-colors cursor-pointer"
                                       >
                                         <FileText className="w-3.5 h-3.5 text-sky-600" />
@@ -1373,7 +1914,12 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
 
                                       <button
                                         type="button"
-                                        onClick={() => setCloudLinkCategory('spreadsheet')}
+                                        onClick={() => {
+                                          setEditingResourceId(null);
+                                          setCloudLinkTitle('');
+                                          setCloudLinkUrl('');
+                                          setCloudLinkCategory('spreadsheet');
+                                        }}
                                         className="px-3 py-1.5 bg-white border border-emerald-200 hover:bg-emerald-50 text-emerald-900 text-xs font-semibold rounded-lg shadow-2xs flex items-center gap-1.5 transition-colors cursor-pointer"
                                       >
                                         <Table2 className="w-3.5 h-3.5 text-emerald-600" />
@@ -1382,7 +1928,12 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
 
                                       <button
                                         type="button"
-                                        onClick={() => setCloudLinkCategory('presentation')}
+                                        onClick={() => {
+                                          setEditingResourceId(null);
+                                          setCloudLinkTitle('');
+                                          setCloudLinkUrl('');
+                                          setCloudLinkCategory('presentation');
+                                        }}
                                         className="px-3 py-1.5 bg-white border border-amber-200 hover:bg-amber-50 text-amber-900 text-xs font-semibold rounded-lg shadow-2xs flex items-center gap-1.5 transition-colors cursor-pointer"
                                       >
                                         <Presentation className="w-3.5 h-3.5 text-amber-600" />
@@ -1392,26 +1943,28 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          const desc = prompt('Instrucción de la tarea:', assignmentNotes);
-                                          if (desc) {
-                                            setAssignmentNotes(desc);
-                                            updateLesson(course.id, mod.id, les.id, {
-                                              assignment: {
-                                                id: 'assign-' + les.id,
-                                                title: 'Tarea Práctica: ' + lessonTitle,
-                                                description: desc,
-                                                instructions: 'Realizar y entregar reporte técnico.',
-                                                maxPoints: 100,
-                                                dueDate: '2026-11-20',
-                                              },
-                                            });
-                                            showToast('Instrucciones de tarea actualizadas.');
-                                          }
+                                          setEditingResourceId(null);
+                                          setCloudLinkTitle('');
+                                          setCloudLinkUrl('');
+                                          setCloudLinkCategory('other');
                                         }}
-                                        className="px-3.5 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 text-xs font-semibold rounded-lg shadow-2xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                                        className="px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-800 text-xs font-semibold rounded-lg shadow-2xs flex items-center gap-1.5 transition-colors cursor-pointer"
                                       >
-                                        <Plus className="w-3.5 h-3.5 text-slate-600" />
-                                        <span>Añadir Tarea</span>
+                                        <LinkIcon className="w-3.5 h-3.5 text-[#4B3B8B]" />
+                                        <span>🔗 Enlace Web</span>
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        onClick={openAssignmentModal}
+                                        className="px-3.5 py-1.5 bg-white border border-[#4B3B8B]/40 hover:bg-[#FAF8FF] text-[#4B3B8B] text-xs font-bold rounded-lg shadow-2xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                                      >
+                                        {les.assignment ? (
+                                          <Edit2 className="w-3.5 h-3.5 text-[#4B3B8B]" />
+                                        ) : (
+                                          <Plus className="w-3.5 h-3.5 text-[#4B3B8B]" />
+                                        )}
+                                        <span>{les.assignment ? 'Editar Tarea' : 'Añadir Tarea'}</span>
                                       </button>
 
                                       <button
@@ -1420,7 +1973,7 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
                                         className="px-3.5 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 text-xs font-semibold rounded-lg shadow-2xs flex items-center gap-1.5 transition-colors cursor-pointer"
                                       >
                                         <Edit2 className="w-3.5 h-3.5 text-slate-600" />
-                                        <span>Crear Quiz</span>
+                                        <span>{les.quiz ? 'Editar Quiz' : 'Crear Quiz'}</span>
                                       </button>
 
                                       {/* Generador de Simuladores Interactivos con IA */}
@@ -1435,26 +1988,45 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
                                       </button>
                                     </div>
 
-                                    {/* Inline Cloud Link Form when category button clicked */}
+                                    {/* Inline Cloud Link Form when adding OR editing an external link */}
                                     {cloudLinkCategory && (
                                       <div className="p-3.5 bg-white border border-[#CBB8E8] rounded-xl space-y-2.5 text-xs animate-in fade-in duration-150">
                                         <div className="flex items-center justify-between">
                                           <span className="font-bold text-[#4B3B8B]">
-                                            {cloudLinkCategory === 'spreadsheet'
+                                            {editingResourceId
+                                              ? '✏️ Editar / Reemplazar Enlace Externo'
+                                              : cloudLinkCategory === 'spreadsheet'
                                               ? '📊 Vincular Hoja de Cálculo (Google Sheets / Excel / OneDrive)'
                                               : cloudLinkCategory === 'presentation'
                                               ? '📽️ Vincular Presentación (Google Slides / PowerPoint / OneDrive)'
+                                              : cloudLinkCategory === 'other'
+                                              ? '🔗 Vincular Enlace Web de Apoyo'
                                               : '📄 Vincular Documento (Google Docs / Word / OneDrive / PDF)'}
                                           </span>
                                           <button
                                             type="button"
-                                            onClick={() => setCloudLinkCategory(null)}
+                                            onClick={() => {
+                                              setCloudLinkCategory(null);
+                                              setEditingResourceId(null);
+                                              setCloudLinkTitle('');
+                                              setCloudLinkUrl('');
+                                            }}
                                             className="text-slate-400 hover:text-slate-700 text-xs cursor-pointer"
                                           >
                                             ✕
                                           </button>
                                         </div>
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                                          <select
+                                            value={cloudLinkCategory}
+                                            onChange={(e) => setCloudLinkCategory(e.target.value as DocCategory)}
+                                            className="p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-semibold"
+                                          >
+                                            <option value="document">📄 Documento</option>
+                                            <option value="spreadsheet">📊 Hoja de Cálculo</option>
+                                            <option value="presentation">📽️ Presentación</option>
+                                            <option value="other">🔗 Enlace Web</option>
+                                          </select>
                                           <input
                                             type="text"
                                             placeholder="Título visible para el alumno..."
@@ -1464,7 +2036,7 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
                                           />
                                           <input
                                             type="url"
-                                            placeholder="https://docs.google.com/... o OneDrive URL"
+                                            placeholder="https://docs.google.com/... o URL web"
                                             value={cloudLinkUrl}
                                             onChange={(e) => setCloudLinkUrl(e.target.value)}
                                             className="md:col-span-2 p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
@@ -1473,7 +2045,12 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
                                         <div className="flex justify-end gap-2">
                                           <button
                                             type="button"
-                                            onClick={() => setCloudLinkCategory(null)}
+                                            onClick={() => {
+                                              setCloudLinkCategory(null);
+                                              setEditingResourceId(null);
+                                              setCloudLinkTitle('');
+                                              setCloudLinkUrl('');
+                                            }}
                                             className="px-3 py-1.5 bg-slate-100 text-slate-700 rounded-lg font-semibold cursor-pointer"
                                           >
                                             Cancelar
@@ -1484,7 +2061,65 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
                                             disabled={!cloudLinkUrl.trim()}
                                             className="px-4 py-1.5 bg-[#4B3B8B] hover:bg-[#3B2D73] disabled:opacity-50 text-white rounded-lg font-bold cursor-pointer"
                                           >
-                                            Vincular a Lección
+                                            {editingResourceId ? 'Guardar Cambios del Enlace' : 'Vincular a Lección'}
+                                          </button>
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {/* Active Assignment Card */}
+                                    {les.assignment && (
+                                      <div className="p-3.5 bg-white border border-[#CBB8E8] rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+                                        <div className="space-y-1 min-w-0">
+                                          <div className="flex items-center gap-2 flex-wrap">
+                                            <span className="px-2 py-0.5 rounded bg-[#4B3B8B]/10 text-[#4B3B8B] text-[10px] font-bold uppercase">
+                                              Tarea Asignada
+                                            </span>
+                                            <span className="text-[10px] font-mono text-slate-500 flex items-center gap-1">
+                                              <Calendar className="w-3 h-3" />
+                                              Límite: {les.assignment.dueDate || 'Sin fecha'}
+                                            </span>
+                                            <span className="text-[10px] font-mono font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
+                                              Ponderación: {les.assignment.maxPoints || 100} pts
+                                            </span>
+                                            <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded">
+                                              Entrega:{' '}
+                                              {les.assignment.deliveryType === 'file'
+                                                ? 'Archivo'
+                                                : les.assignment.deliveryType === 'link'
+                                                ? 'Enlace'
+                                                : 'Archivo o Enlace'}
+                                            </span>
+                                          </div>
+                                          <div className="text-xs font-bold text-slate-900 truncate">
+                                            {les.assignment.title}
+                                          </div>
+                                          <div className="text-[11px] text-slate-600 line-clamp-2">
+                                            {les.assignment.instructions || les.assignment.description}
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-1.5 shrink-0">
+                                          <button
+                                            type="button"
+                                            onClick={openAssignmentModal}
+                                            className="px-3 py-1.5 bg-[#F7F2FD] hover:bg-[#EDE4FB] text-[#4B3B8B] text-xs font-bold rounded-lg flex items-center gap-1 cursor-pointer"
+                                          >
+                                            <Edit2 className="w-3.5 h-3.5" />
+                                            <span>Editar Tarea</span>
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              if (window.confirm(`¿Eliminar la tarea "${les.assignment?.title}"?`)) {
+                                                setAssignmentNotes('');
+                                                updateLesson(course.id, mod.id, les.id, { assignment: undefined });
+                                                showToast('Tarea eliminada de la lección.');
+                                              }
+                                            }}
+                                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer"
+                                            title="Eliminar tarea"
+                                          >
+                                            <Trash2 className="w-4 h-4" />
                                           </button>
                                         </div>
                                       </div>
@@ -1548,102 +2183,152 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
                                       </div>
                                     )}
 
-                                    {/* Uploaded Documents List (PDF, Word, ZIP) */}
+                                    {/* Uploaded Documents & Cloud Links List */}
                                     {les.resources && les.resources.length > 0 && (
                                       <div className="space-y-2 pt-1">
                                         <div className="text-[11px] font-bold text-slate-700 flex items-center justify-between">
-                                          <span>Archivos y Guías Cargadas ({les.resources.length}):</span>
+                                          <span>Archivos y Enlaces Cargados ({les.resources.length}):</span>
                                           <span className="text-[10px] text-slate-500 font-normal">Disponibles de inmediato para los alumnos</span>
                                         </div>
                                         <div className="space-y-1.5">
-                                          {les.resources.map((res) => (
-                                            <div
-                                              key={res.id}
-                                              className="flex items-center justify-between bg-white border border-slate-200/90 rounded-lg p-2.5 text-xs shadow-2xs hover:border-[#6080B8] transition-colors"
-                                            >
-                                              <div className="flex items-center gap-2.5 min-w-0 pr-2">
-                                                <div className="w-8 h-8 rounded-lg bg-[#FAFBFD] border border-slate-200 flex items-center justify-center shrink-0">
-                                                  {res.type === 'pdf' ? (
-                                                    <FileText className="w-4 h-4 text-rose-500" />
-                                                  ) : res.type === 'zip' ? (
-                                                    <Layers className="w-4 h-4 text-amber-500" />
-                                                  ) : res.type === 'code' ? (
-                                                    <FileCode className="w-4 h-4 text-emerald-600" />
-                                                  ) : (
-                                                    <FileText className="w-4 h-4 text-blue-600" />
-                                                  )}
-                                                </div>
-                                                <div className="min-w-0">
-                                                  <div className="font-bold text-slate-800 truncate" title={res.title}>
-                                                    {res.title}
-                                                  </div>
-                                                  <div className="text-[10px] text-slate-500 flex items-center gap-2">
-                                                    <span className="font-mono bg-slate-100 px-1.5 py-0.2 rounded text-slate-600 font-semibold">
-                                                      {res.size || '2.4 MB'}
-                                                    </span>
-                                                    <span className="uppercase text-[9px] bg-slate-100 px-1 py-0.2 rounded font-semibold text-slate-500">{res.type}</span>
-                                                    {res.description && (
-                                                      <span className="hidden sm:inline text-slate-400 truncate max-w-[200px]">
-                                                        • {res.description}
-                                                      </span>
+                                          {les.resources.map((res) => {
+                                            const isExternalLink =
+                                              res.provider !== 'file' &&
+                                              !(res.url || '').startsWith('blob:') &&
+                                              !(res.url || '').startsWith('data:');
+
+                                            return (
+                                              <div
+                                                key={res.id}
+                                                className="flex flex-wrap items-center justify-between gap-2 bg-white border border-slate-200/90 rounded-lg p-2.5 text-xs shadow-2xs hover:border-[#6080B8] transition-colors"
+                                              >
+                                                <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                                                  <div className="w-8 h-8 rounded-lg bg-[#FAFBFD] border border-slate-200 flex items-center justify-center shrink-0">
+                                                    {res.type === 'pdf' ? (
+                                                      <FileText className="w-4 h-4 text-rose-500" />
+                                                    ) : res.type === 'zip' ? (
+                                                      <Layers className="w-4 h-4 text-amber-500" />
+                                                    ) : res.type === 'code' ? (
+                                                      <FileCode className="w-4 h-4 text-emerald-600" />
+                                                    ) : res.type === 'gsheet' || res.type === 'excel' ? (
+                                                      <Table2 className="w-4 h-4 text-emerald-600" />
+                                                    ) : res.type === 'gslides' || res.type === 'ppt' ? (
+                                                      <Presentation className="w-4 h-4 text-amber-600" />
+                                                    ) : isExternalLink ? (
+                                                      <LinkIcon className="w-4 h-4 text-[#4B3B8B]" />
+                                                    ) : (
+                                                      <FileText className="w-4 h-4 text-blue-600" />
                                                     )}
                                                   </div>
+                                                  <div className="min-w-0">
+                                                    <div className="font-bold text-slate-800 truncate" title={res.title}>
+                                                      {res.title}
+                                                    </div>
+                                                    <div className="text-[10px] text-slate-500 flex items-center gap-2 flex-wrap">
+                                                      <span className="font-mono bg-slate-100 px-1.5 py-0.2 rounded text-slate-600 font-semibold">
+                                                        {res.size || (isExternalLink ? 'Enlace Web' : 'Archivo Local')}
+                                                      </span>
+                                                      <span className="uppercase text-[9px] bg-slate-100 px-1 py-0.2 rounded font-semibold text-slate-500">
+                                                        {res.type}
+                                                      </span>
+                                                      {isExternalLink && res.url && res.url !== '#' && (
+                                                        <span className="text-slate-400 font-mono truncate max-w-[180px]">
+                                                          {res.url}
+                                                        </span>
+                                                      )}
+                                                    </div>
+                                                  </div>
                                                 </div>
-                                              </div>
 
-                                              <div className="flex items-center gap-1.5 shrink-0">
-                                                {res.url && res.url !== '#' && (
+                                                <div className="flex items-center gap-1.5 shrink-0">
+                                                  {res.url && res.url !== '#' && (
+                                                    <>
+                                                      <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                          setPreviewDoc({
+                                                            title: res.title,
+                                                            url: res.url,
+                                                            category: res.docCategory || 'document',
+                                                          })
+                                                        }
+                                                        className="px-2 py-1.5 bg-[#F7F2FD] hover:bg-[#EDE4FB] text-[#4B3B8B] rounded text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                                                        title="Vista previa en plataforma"
+                                                      >
+                                                        <Eye className="w-3.5 h-3.5" />
+                                                        <span className="hidden sm:inline">Vista Previa</span>
+                                                      </button>
+                                                      {isExternalLink && (
+                                                        <a
+                                                          href={res.url}
+                                                          target="_blank"
+                                                          rel="noopener noreferrer"
+                                                          className="p-1.5 bg-slate-100 hover:bg-[#E5EAF3] text-slate-700 hover:text-[#4B3B8B] rounded transition-colors"
+                                                          title="Abrir enlace en pestaña nueva"
+                                                        >
+                                                          <ExternalLink className="w-3.5 h-3.5" />
+                                                        </a>
+                                                      )}
+                                                    </>
+                                                  )}
+
+                                                  {!isExternalLink && (
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => handleDownloadOrOpenResource(res)}
+                                                      className="p-1.5 bg-slate-100 hover:bg-[#E5EAF3] text-slate-700 hover:text-[#4B3B8B] rounded transition-colors cursor-pointer"
+                                                      title="Descargar / Abrir archivo"
+                                                    >
+                                                      <Download className="w-3.5 h-3.5" />
+                                                    </button>
+                                                  )}
+
+                                                  {isExternalLink ? (
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => openEditCloudLink(res)}
+                                                      className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 rounded text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                                                      title="Editar o reemplazar enlace web sin subir archivo local"
+                                                    >
+                                                      <Edit2 className="w-3 h-3" />
+                                                      <span>Editar / Reemplazar Enlace</span>
+                                                    </button>
+                                                  ) : (
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => {
+                                                        setReplaceDocId(res.id);
+                                                        documentInputRef.current?.click();
+                                                      }}
+                                                      className="px-2 py-1 bg-slate-100 hover:bg-[#E5EAF3] text-slate-700 hover:text-[#4B3B8B] rounded text-[11px] font-semibold transition-colors cursor-pointer"
+                                                      title="Reemplazar archivo local"
+                                                    >
+                                                      Reemplazar Archivo
+                                                    </button>
+                                                  )}
+
                                                   <button
                                                     type="button"
-                                                    onClick={() =>
-                                                      setPreviewDoc({
-                                                        title: res.title,
-                                                        url: res.url,
-                                                        category: res.docCategory || 'document',
-                                                      })
-                                                    }
-                                                    className="px-2 py-1.5 bg-[#F7F2FD] hover:bg-[#EDE4FB] text-[#4B3B8B] rounded text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer"
-                                                    title="Vista previa en plataforma"
+                                                    onClick={() => {
+                                                      if (window.confirm(`¿Eliminar "${res.title}" de esta lección?`)) {
+                                                        deleteResource(course.id, mod.id, les.id, res.id);
+                                                        if (editingResourceId === res.id) {
+                                                          setEditingResourceId(null);
+                                                          setCloudLinkCategory(null);
+                                                        }
+                                                        showToast(`"${res.title}" eliminado.`);
+                                                      }
+                                                    }}
+                                                    className="px-2 py-1 hover:bg-rose-50 text-slate-500 hover:text-rose-600 rounded transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-semibold"
+                                                    title="Eliminar enlace o archivo"
                                                   >
-                                                    <Eye className="w-3.5 h-3.5" />
-                                                    <span className="hidden sm:inline">Vista Previa</span>
+                                                    <Trash2 className="w-3.5 h-3.5" />
+                                                    <span className="hidden md:inline">Eliminar</span>
                                                   </button>
-                                                )}
-                                                <button
-                                                  type="button"
-                                                  onClick={() => handleDownloadOrOpenResource(res)}
-                                                  className="p-1.5 bg-slate-100 hover:bg-[#E5EAF3] text-slate-700 hover:text-[#4B3B8B] rounded transition-colors cursor-pointer"
-                                                  title="Descargar / Abrir documento"
-                                                >
-                                                  <Download className="w-3.5 h-3.5" />
-                                                </button>
-                                                <button
-                                                  type="button"
-                                                  onClick={() => {
-                                                    setReplaceDocId(res.id);
-                                                    documentInputRef.current?.click();
-                                                  }}
-                                                  className="px-2 py-1 bg-slate-100 hover:bg-[#E5EAF3] text-slate-700 hover:text-[#4B3B8B] rounded text-[11px] font-semibold transition-colors cursor-pointer"
-                                                  title="Reemplazar archivo"
-                                                >
-                                                  Reemplazar
-                                                </button>
-                                                <button
-                                                  type="button"
-                                                  onClick={() => {
-                                                    if (window.confirm(`¿Eliminar el archivo "${res.title}"?`)) {
-                                                      deleteResource(course.id, mod.id, les.id, res.id);
-                                                      showToast(`Archivo "${res.title}" eliminado.`);
-                                                    }
-                                                  }}
-                                                  className="p-1.5 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
-                                                  title="Eliminar archivo"
-                                                >
-                                                  <Trash2 className="w-3.5 h-3.5" />
-                                                </button>
+                                                </div>
                                               </div>
-                                            </div>
-                                          ))}
+                                            );
+                                          })}
                                         </div>
                                       </div>
                                     )}
@@ -1651,26 +2336,25 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
                                     {/* Textarea for Detalle de asignación */}
                                     <div className="space-y-1.5 pt-1">
                                       <label className="block text-[11px] font-bold text-slate-700">
-                                        Detalle de asignación práctica
+                                        Notas rápidas / Detalle de asignación práctica
                                       </label>
                                       <textarea
                                         rows={2}
                                         value={assignmentNotes}
                                         onChange={(e) => {
                                           setAssignmentNotes(e.target.value);
-                                          updateLesson(course.id, mod.id, les.id, {
-                                            assignment: {
-                                              id: 'assign-' + les.id,
-                                              title: 'Asignación: ' + lessonTitle,
-                                              description: e.target.value,
-                                              instructions: 'Completar en el taller y subir reporte.',
-                                              maxPoints: 100,
-                                              dueDate: '2026-11-20',
-                                            },
-                                          });
+                                          if (les.assignment) {
+                                            updateLesson(course.id, mod.id, les.id, {
+                                              assignment: {
+                                                ...les.assignment,
+                                                description: e.target.value,
+                                                instructions: e.target.value,
+                                              },
+                                            });
+                                          }
                                         }}
                                         className="w-full p-3 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#4B3B8B] resize-none"
-                                        placeholder="Describe las instrucciones de la práctica o tarea para los estudiantes..."
+                                        placeholder="Usa '+ Añadir Tarea' para definir título, fecha límite y tipo de entrega, o escribe aquí notas de apoyo..."
                                       />
                                     </div>
                                   </div>
@@ -1721,7 +2405,7 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
           </div>
         )}
 
-        {/* Tab Body: Info. General (with Teacher Assignment Roster) */}
+        {/* Tab Body: Info. General (with Teacher Assignment Roster & Admin-only Price) */}
         {activeTab === 'info' && (
           <div className="p-6 md:p-8 space-y-6">
             <h3 className="text-base font-bold text-slate-900">Información General del Programa</h3>
@@ -1738,6 +2422,16 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
               </div>
 
               <div>
+                <label className="block font-semibold text-slate-700 mb-1">Subtítulo / Enfoque:</label>
+                <input
+                  type="text"
+                  value={courseSubtitle}
+                  onChange={(e) => setCourseSubtitle(e.target.value)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                />
+              </div>
+
+              <div>
                 <label className="block font-semibold text-slate-700 mb-1">Especialidad / Categoría:</label>
                 <input
                   type="text"
@@ -1748,20 +2442,46 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Inversión / Costo ($ USD):</label>
-                <input
-                  type="number"
-                  value={coursePrice}
-                  onChange={(e) => setCoursePrice(Number(e.target.value))}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg font-mono text-slate-900"
-                />
+                <label className="block font-semibold text-slate-700 mb-1">Nivel Académico:</label>
+                <select
+                  value={courseLevel}
+                  onChange={(e) => setCourseLevel(e.target.value as CourseLevel)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                >
+                  <option value="Principiante">Principiante</option>
+                  <option value="Intermedio">Intermedio</option>
+                  <option value="Avanzado">Avanzado</option>
+                </select>
               </div>
+
+              {role === 'admin' && (
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Inversión / Costo ($ USD):</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={coursePrice}
+                    onChange={(e) => setCoursePrice(Number(e.target.value))}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg font-mono text-slate-900"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Centro de Formación:</label>
                 <div className="p-2.5 bg-slate-100 rounded-lg text-slate-700 font-semibold">
                   Centro de Formación Profesional AGAPE (Sonsonate, El Salvador)
                 </div>
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="block font-semibold text-slate-700 mb-1">Descripción General del Curso:</label>
+                <textarea
+                  rows={3}
+                  value={courseDescription}
+                  onChange={(e) => setCourseDescription(e.target.value)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                />
               </div>
             </div>
 
@@ -1811,12 +2531,15 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
                 onClick={() => {
                   updateCourse(course.id, {
                     title: courseTitle,
+                    subtitle: courseSubtitle,
                     category: courseCategory,
-                    price: coursePrice,
+                    level: courseLevel,
+                    description: courseDescription,
+                    ...(role === 'admin' ? { price: coursePrice } : {}),
                   });
                   showToast('Información general actualizada.');
                 }}
-                className="px-5 py-2 bg-[#4B3B8B] hover:bg-[#3B2D73] text-white text-xs font-semibold rounded-lg"
+                className="px-5 py-2 bg-[#4B3B8B] hover:bg-[#3B2D73] text-white text-xs font-semibold rounded-lg cursor-pointer"
               >
                 Guardar Ficha
               </button>
