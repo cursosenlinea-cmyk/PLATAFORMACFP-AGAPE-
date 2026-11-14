@@ -121,6 +121,12 @@ const AgapeLmsWorkspace: React.FC = () => {
         {/* Top Header with Breadcrumbs, Title and Authenticated Profile */}
         <AgapeHeader
           courseTitle={currentCourse?.title || 'Campus Virtual CFP ÁGAPE'}
+          showCourseTitle={
+            role !== 'admin' &&
+            (currentTab === 'courses' ||
+              currentTab === 'classroom' ||
+              currentTab === 'analytics')
+          }
           onNavigateToCourses={() =>
             setCurrentTab(
               role === 'admin' ? 'admin-courses' : role === 'instructor' ? 'courses' : 'classroom'

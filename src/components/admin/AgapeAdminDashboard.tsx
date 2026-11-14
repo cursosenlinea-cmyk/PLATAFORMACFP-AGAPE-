@@ -96,6 +96,14 @@ export const AgapeAdminDashboard: React.FC<AgapeAdminDashboardProps> = ({
     setTimeout(() => setToastMsg(null), 4000);
   };
 
+  // In-app confirmation modal (replaces window.confirm blocked inside iframes)
+  const [adminConfirmDialog, setAdminConfirmDialog] = useState<{
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    onConfirm: () => void;
+  } | null>(null);
+
   // =========================================================
   // TAB 1 STATE: USERS & MULTI-ADMINS
   // =========================================================
@@ -960,18 +968,19 @@ export const AgapeAdminDashboard: React.FC<AgapeAdminDashboardProps> = ({
 
                                 <button
                                   onClick={() => {
-                                    if (
-                                      window.confirm(
-                                        `¿Confirmas eliminar definitivamente la cuenta de ${u.name}?`
-                                      )
-                                    ) {
-                                      const res = deleteUser(u.id);
-                                      if (!res.success && res.message) {
-                                        showToast(res.message, 'error');
-                                      } else {
-                                        showToast(`Cuenta de ${u.name} eliminada.`);
-                                      }
-                                    }
+                                    setAdminConfirmDialog({
+                                      title: 'Eliminar Cuenta Institucional',
+                                      message: `¿Confirmas eliminar definitivamente la cuenta de ${u.name}?`,
+                                      confirmLabel: 'Sí, Eliminar Cuenta',
+                                      onConfirm: () => {
+                                        const res = deleteUser(u.id);
+                                        if (!res.success && res.message) {
+                                          showToast(res.message, 'error');
+                                        } else {
+                                          showToast(`Cuenta de ${u.name} eliminada.`);
+                                        }
+                                      },
+                                    });
                                   }}
                                   className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
                                   title="Eliminar cuenta"
@@ -1086,14 +1095,15 @@ export const AgapeAdminDashboard: React.FC<AgapeAdminDashboardProps> = ({
 
                         <button
                           onClick={() => {
-                            if (
-                              window.confirm(
-                                `¿Deseas eliminar el curso "${course.title}"? Esta acción no se puede deshacer.`
-                              )
-                            ) {
-                              deleteCourse(course.id);
-                              showToast(`Curso "${course.title}" eliminado.`);
-                            }
+                            setAdminConfirmDialog({
+                              title: 'Eliminar Programa / Curso',
+                              message: `¿Deseas eliminar el curso "${course.title}"? Esta acción no se puede deshacer.`,
+                              confirmLabel: 'Sí, Eliminar Curso',
+                              onConfirm: () => {
+                                deleteCourse(course.id);
+                                showToast(`Curso "${course.title}" eliminado.`);
+                              },
+                            });
                           }}
                           className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer"
                           title="Eliminar curso"
@@ -2611,6 +2621,52 @@ export const AgapeAdminDashboard: React.FC<AgapeAdminDashboardProps> = ({
                   className="px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white font-bold rounded-lg cursor-pointer"
                 >
                   Confirmar Devolución
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: CONFIRMACIÓN SEGURA EN PLATAFORMA (SIN window.confirm) */}
+      {/* ========================================================================= */}
+      {adminConfirmDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden">
+            <div className="bg-rose-700 p-4 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Trash2 className="w-4 h-4 text-amber-200" />
+                <h3 className="text-sm font-bold">{adminConfirmDialog.title}</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAdminConfirmDialog(null)}
+                className="text-white/80 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4 text-xs">
+              <p className="text-slate-700 leading-relaxed">{adminConfirmDialog.message}</p>
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setAdminConfirmDialog(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const action = adminConfirmDialog.onConfirm;
+                    setAdminConfirmDialog(null);
+                    action();
+                  }}
+                  className="px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white font-bold rounded-lg cursor-pointer"
+                >
+                  {adminConfirmDialog.confirmLabel || 'Sí, Eliminar'}
                 </button>
               </div>
             </div>

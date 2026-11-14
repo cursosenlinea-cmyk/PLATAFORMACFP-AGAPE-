@@ -1,5 +1,14 @@
-import React from 'react';
-import { X, ExternalLink, FileText, Table2, Presentation, File } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import {
+  X,
+  ExternalLink,
+  FileText,
+  Table2,
+  Presentation,
+  File,
+  ShieldAlert,
+  Eye,
+} from 'lucide-react';
 import { DocCategory } from '../../types/lms';
 
 interface DocumentPreviewModalProps {
@@ -59,15 +68,29 @@ export const getEmbeddableDocumentUrl = (rawUrl: string): string => {
     return `https://drive.google.com/file/d/${gdriveIdMatch[1]}/preview`;
   }
 
-  // OneDrive / SharePoint embed parameter if applicable
-  if (/onedrive\.live\.com|1drv\.ms|sharepoint\.com/i.test(url)) {
-    if (url.includes('action=embedview') || url.includes('/embed')) return url;
-    if (url.includes('onedrive.live.com/view.aspx')) {
-      return url.replace('view.aspx', 'embed');
-    }
+  // OneDrive / SharePoint embed parameter if explicitly an embed link
+  if (/onedrive\.live\.com\/view\.aspx/i.test(url)) {
+    return url.replace('view.aspx', 'embed');
   }
 
   return url;
+};
+
+/**
+ * Providers that send strict X-Frame-Options / CSP frame-ancestors headers,
+ * causing Chrome to display "Chrome bloqueó esta página" inside an iframe.
+ */
+const isFrameBlockedExternalProvider = (rawUrl: string): boolean => {
+  const url = (rawUrl || '').trim();
+  if (!url || url.startsWith('blob:') || url.startsWith('data:') || url.startsWith('/')) {
+    return false;
+  }
+  if (/sharepoint\.com|1drv\.ms|office\.com|live\.com/i.test(url)) {
+    // Allow only explicit OneDrive personal embed URLs
+    if (/onedrive\.live\.com\/embed/i.test(url)) return false;
+    return true;
+  }
+  return false;
 };
 
 export const DocumentPreviewModal: React.FC<DocumentPreviewModalProps> = ({
@@ -77,20 +100,81 @@ export const DocumentPreviewModal: React.FC<DocumentPreviewModalProps> = ({
   url,
   category = 'other',
 }) => {
-  if (!isOpen) return null;
+  const [resolvedBlobUrl, setResolvedBlobUrl] = useState<string | null>(null);
+  const [forceIframe, setForceIframe] = useState<boolean>(false);
 
   const cleanUrl = (url || '').trim();
+
+  // Reset forceIframe when URL changes or modal reopens
+  useEffect(() => {
+    setForceIframe(false);
+  }, [cleanUrl, isOpen]);
+
+  // Convert base64 data: URLs into safe Blob URLs so Chrome's iframe viewer renders PDFs without blocking
+  useEffect(() => {
+    if (!isOpen || !cleanUrl.startsWith('data:')) {
+      setResolvedBlobUrl(null);
+      return;
+    }
+
+    let objectUrl: string | null = null;
+    try {
+      const [header, base64Data] = cleanUrl.split(',');
+      if (header && base64Data) {
+        const mimeMatch = header.match(/data:([^;]+)/i);
+        const mimeType = mimeMatch ? mimeMatch[1] : 'application/pdf';
+        const byteCharacters = atob(base64Data);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: mimeType });
+        objectUrl = URL.createObjectURL(blob);
+        setResolvedBlobUrl(objectUrl);
+      }
+    } catch {
+      setResolvedBlobUrl(null);
+    }
+
+    return () => {
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [cleanUrl, isOpen]);
+
+  if (!isOpen) return null;
+
   const hasValidUrl = Boolean(cleanUrl && cleanUrl !== '#');
-  const embedUrl = getEmbeddableDocumentUrl(cleanUrl);
+  const embedUrl = resolvedBlobUrl || getEmbeddableDocumentUrl(cleanUrl);
+  const providerBlocksIframe = hasValidUrl && isFrameBlockedExternalProvider(cleanUrl);
+  const shouldShowFallbackCard = providerBlocksIframe && !forceIframe;
 
   const categoryBadge =
     category === 'spreadsheet'
-      ? { label: 'Hoja de Cálculo', icon: Table2, color: 'bg-emerald-500/20 text-emerald-200 border-emerald-400/40' }
+      ? {
+          label: 'Hoja de Cálculo',
+          icon: Table2,
+          color: 'bg-emerald-500/20 text-emerald-200 border-emerald-400/40',
+        }
       : category === 'presentation'
-      ? { label: 'Presentación', icon: Presentation, color: 'bg-amber-500/20 text-amber-200 border-amber-400/40' }
+      ? {
+          label: 'Presentación',
+          icon: Presentation,
+          color: 'bg-amber-500/20 text-amber-200 border-amber-400/40',
+        }
       : category === 'document'
-      ? { label: 'Documento', icon: FileText, color: 'bg-sky-500/20 text-sky-200 border-sky-400/40' }
-      : { label: 'Archivo / Enlace', icon: File, color: 'bg-white/10 text-slate-200 border-white/20' };
+      ? {
+          label: 'Documento',
+          icon: FileText,
+          color: 'bg-sky-500/20 text-sky-200 border-sky-400/40',
+        }
+      : {
+          label: 'Archivo / Enlace',
+          icon: File,
+          color: 'bg-white/10 text-slate-200 border-white/20',
+        };
 
   const IconComp = categoryBadge.icon;
 
@@ -139,14 +223,7 @@ export const DocumentPreviewModal: React.FC<DocumentPreviewModalProps> = ({
 
         {/* Embedded Content Area */}
         <div className="flex-1 bg-[#F4F6F9] relative flex flex-col">
-          {hasValidUrl && embedUrl ? (
-            <iframe
-              src={embedUrl}
-              title={title}
-              className="w-full h-full border-0 bg-white flex-1"
-              allowFullScreen
-            />
-          ) : (
+          {!hasValidUrl || !embedUrl ? (
             <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-600">
               <FileText className="w-10 h-10 text-[#4B3B8B] mb-2" />
               <p className="text-sm font-bold text-slate-800">Vista previa no disponible</p>
@@ -154,12 +231,61 @@ export const DocumentPreviewModal: React.FC<DocumentPreviewModalProps> = ({
                 Este recurso no posee una URL embebible válida.
               </p>
             </div>
+          ) : shouldShowFallbackCard ? (
+            <div className="h-full flex flex-col items-center justify-center text-center p-8">
+              <div className="max-w-lg w-full bg-white rounded-2xl border border-slate-200 shadow-sm p-7 space-y-4">
+                <div className="w-14 h-14 rounded-2xl bg-[#FAF8FF] border border-[#4B3B8B]/20 text-[#4B3B8B] flex items-center justify-center mx-auto">
+                  <ShieldAlert className="w-7 h-7" />
+                </div>
+                <div className="space-y-1.5">
+                  <span className="inline-block px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold uppercase">
+                    Microsoft SharePoint / OneDrive Protegido
+                  </span>
+                  <h4 className="text-base font-extrabold text-[#3B2C73]">{title}</h4>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    El servidor institucional de <strong>OneDrive / SharePoint</strong> bloquea la carga directa dentro de marcos integrados (<em>X-Frame-Options / frame-ancestors</em>) para proteger tus credenciales. Ábrelo directamente en una pestaña nueva para visualizar o editar el documento sin bloqueos.
+                  </p>
+                </div>
+
+                <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-mono text-slate-500 truncate">
+                  {cleanUrl}
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-2.5 pt-1">
+                  <a
+                    href={cleanUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full sm:w-auto px-5 py-2.5 bg-gradient-to-r from-[#4B3B8B] to-[#6080B8] hover:opacity-95 text-white rounded-xl text-xs font-bold inline-flex items-center justify-center gap-2 shadow-sm"
+                  >
+                    <ExternalLink className="w-4 h-4 text-[#F2C94C]" />
+                    <span>Abrir Documento en Pestaña Nueva</span>
+                  </a>
+
+                  <button
+                    type="button"
+                    onClick={() => setForceIframe(true)}
+                    className="w-full sm:w-auto px-4 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                    <span>Intentar incrustar aquí</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <iframe
+              src={embedUrl}
+              title={title}
+              className="w-full h-full border-0 bg-white flex-1"
+              allowFullScreen
+            />
           )}
         </div>
 
         <div className="px-5 py-2.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
           <span>
-            Si el documento aparece en blanco por restricciones de seguridad del proveedor (X-Frame-Options / permisos), ábrelo directamente:
+            Si el documento aparece bloqueado o en blanco por permisos del proveedor (X-Frame-Options), ábrelo directamente:
           </span>
           <div className="flex items-center gap-2">
             {hasValidUrl && (

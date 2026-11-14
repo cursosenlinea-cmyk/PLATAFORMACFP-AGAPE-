@@ -10,11 +10,13 @@ import { useLms, isMasterAdminUser } from '../../context/LmsContext';
 
 interface AgapeHeaderProps {
   courseTitle: string;
+  showCourseTitle?: boolean;
   onNavigateToCourses: () => void;
 }
 
 export const AgapeHeader: React.FC<AgapeHeaderProps> = ({
   courseTitle,
+  showCourseTitle = true,
   onNavigateToCourses,
 }) => {
   const { role, currentUser, currentAuthUser, logout } = useLms();
@@ -136,17 +138,15 @@ export const AgapeHeader: React.FC<AgapeHeaderProps> = ({
         </div>
       </div>
 
-      {/* Main Page Header */}
-      <div>
-        <h1 className="text-xl md:text-2xl font-extrabold text-[#3B2C73] tracking-tight">
-          {role === 'admin'
-            ? 'Administración General · '
-            : role === 'instructor'
-            ? 'Gestión Curricular: '
-            : 'Aula de Aprendizaje: '}
-          <span className="text-[#1E293B] font-bold">{courseTitle}</span>
-        </h1>
-      </div>
+      {/* Main Page Header (hidden in Admin role so no course title leaks into general admin header) */}
+      {role !== 'admin' && showCourseTitle && (
+        <div>
+          <h1 className="text-xl md:text-2xl font-extrabold text-[#3B2C73] tracking-tight">
+            {role === 'instructor' ? 'Gestión Curricular: ' : 'Aula de Aprendizaje: '}
+            <span className="text-[#1E293B] font-bold">{courseTitle}</span>
+          </h1>
+        </div>
+      )}
     </header>
   );
 };

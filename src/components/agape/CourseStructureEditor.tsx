@@ -123,10 +123,22 @@ export const CourseStructureEditor: React.FC<CourseStructureEditorProps> = ({ co
   const [cloudLinkTitle, setCloudLinkTitle] = useState<string>('');
   const [cloudLinkUrl, setCloudLinkUrl] = useState<string>('');
   const [editingResourceId, setEditingResourceId] = useState<string | null>(null);
+  const [editingResourceTarget, setEditingResourceTarget] = useState<{
+    moduleId: string;
+    lessonId: string;
+  } | null>(null);
   const [previewDoc, setPreviewDoc] = useState<{
     title: string;
     url: string;
     category: DocCategory;
+  } | null>(null);
+
+  // In-app Confirmation Modal (replaces browser window.confirm blocked inside iframes)
+  const [confirmDialog, setConfirmDialog] = useState<{
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    onConfirm: () => void;
   } | null>(null);
 
   // Lesson Explanation Text (Lectura / Guía teórica / Código)
@@ -457,30 +469,55 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
       docCategory = 'other';
     }
 
-    const fileUrl = URL.createObjectURL(file);
-
-    if (activeModuleId && activeLessonId) {
+    const commitUploadedResource = (resolvedUrl: string) => {
+      if (!activeModuleId || !activeLessonId) return;
       if (replaceDocId) {
-        deleteResource(course.id, activeModuleId, activeLessonId, replaceDocId);
+        updateResource(course.id, activeModuleId, activeLessonId, replaceDocId, {
+          title: file.name,
+          type: docType,
+          size: sizeStr,
+          url: resolvedUrl,
+          docCategory,
+          provider: 'file',
+          description: 'Documento oficial adjunto para prácticas.',
+        });
         setReplaceDocId(null);
+        showToast(`Archivo reemplazado por "${file.name}" (${sizeStr}).`);
+      } else {
+        addResource(course.id, activeModuleId, activeLessonId, {
+          title: file.name,
+          type: docType,
+          size: sizeStr,
+          url: resolvedUrl,
+          docCategory,
+          provider: 'file',
+          description: 'Documento oficial adjunto para prácticas.',
+        });
+        showToast(`Archivo "${file.name}" (${sizeStr}) cargado correctamente.`);
       }
-      addResource(course.id, activeModuleId, activeLessonId, {
-        title: file.name,
-        type: docType,
-        size: sizeStr,
-        url: fileUrl,
-        docCategory,
-        provider: 'file',
-        description: 'Documento oficial adjunto para prácticas.',
-      });
-      showToast(`Archivo "${file.name}" (${sizeStr}) cargado correctamente.`);
+    };
+
+    if (file.size <= 1.5 * 1024 * 1024) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = typeof reader.result === 'string' ? reader.result : URL.createObjectURL(file);
+        commitUploadedResource(result);
+      };
+      reader.onerror = () => {
+        commitUploadedResource(URL.createObjectURL(file));
+      };
+      reader.readAsDataURL(file);
+    } else {
+      commitUploadedResource(URL.createObjectURL(file));
     }
 
     e.target.value = '';
   };
 
   const handleSaveCloudDocumentLink = () => {
-    if (!cloudLinkCategory || !cloudLinkUrl.trim() || !activeModuleId || !activeLessonId) return;
+    const targetModId = editingResourceTarget?.moduleId || activeModuleId;
+    const targetLesId = editingResourceTarget?.lessonId || activeLessonId;
+    if (!cloudLinkCategory || !cloudLinkUrl.trim() || !targetModId || !targetLesId) return;
     const cleanUrl = cloudLinkUrl.trim();
     const defaultTitle =
       cloudLinkCategory === 'spreadsheet'
@@ -520,10 +557,10 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
     };
 
     if (editingResourceId) {
-      updateResource(course.id, activeModuleId, activeLessonId, editingResourceId, resourcePayload);
+      updateResource(course.id, targetModId, targetLesId, editingResourceId, resourcePayload);
       showToast(`Enlace "${title}" actualizado correctamente.`);
     } else {
-      addResource(course.id, activeModuleId, activeLessonId, resourcePayload);
+      addResource(course.id, targetModId, targetLesId, resourcePayload);
       showToast(`Recurso "${title}" vinculado correctamente.`);
     }
 
@@ -531,10 +568,14 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
     setCloudLinkTitle('');
     setCloudLinkUrl('');
     setEditingResourceId(null);
+    setEditingResourceTarget(null);
   };
 
-  const openEditCloudLink = (res: ResourceItem) => {
+  const openEditCloudLink = (res: ResourceItem, modId?: string, lesId?: string) => {
     setEditingResourceId(res.id);
+    setEditingResourceTarget(
+      modId && lesId ? { moduleId: modId, lessonId: lesId } : null
+    );
     setCloudLinkCategory(res.docCategory || (res.type === 'link' ? 'other' : 'document'));
     setCloudLinkTitle(res.title);
     setCloudLinkUrl(res.url === '#' ? '' : res.url);
@@ -655,10 +696,15 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
       showToast('El curso debe contener al menos un módulo.');
       return;
     }
-    if (window.confirm(`¿Estás seguro de eliminar "${title}" y todas sus lecciones?`)) {
-      deleteModule(course.id, modId);
-      showToast(`"${title}" eliminado del curso.`);
-    }
+    setConfirmDialog({
+      title: 'Eliminar Módulo',
+      message: `¿Estás seguro de eliminar "${title}" y todas sus lecciones?`,
+      confirmLabel: 'Sí, Eliminar Módulo',
+      onConfirm: () => {
+        deleteModule(course.id, modId);
+        showToast(`"${title}" eliminado del curso.`);
+      },
+    });
   };
 
   const handleAddLesson = (moduleId: string) => {
@@ -723,10 +769,15 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
       showToast('Cada módulo debe contener al menos una lección.');
       return;
     }
-    if (window.confirm(`¿Deseas eliminar la lección "${title}"?`)) {
-      deleteLesson(course.id, modId, lesId);
-      showToast(`Lección "${title}" eliminada.`);
-    }
+    setConfirmDialog({
+      title: 'Eliminar Lección',
+      message: `¿Deseas eliminar la lección "${title}"?`,
+      confirmLabel: 'Sí, Eliminar Lección',
+      onConfirm: () => {
+        deleteLesson(course.id, modId, lesId);
+        showToast(`Lección "${title}" eliminada.`);
+      },
+    });
   };
 
   // Helper for inserting sample text into explanation
@@ -1245,6 +1296,163 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Vincular o Editar Enlace Externo / Recurso */}
+      {cloudLinkCategory && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden">
+            <div className="bg-gradient-to-r from-[#3B2C73] to-[#4B3B8B] p-4 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <LinkIcon className="w-4 h-4 text-[#F2C94C]" />
+                <h3 className="text-sm font-bold">
+                  {editingResourceId
+                    ? 'Editar / Reemplazar Enlace o Recurso'
+                    : cloudLinkCategory === 'spreadsheet'
+                    ? 'Vincular Hoja de Cálculo'
+                    : cloudLinkCategory === 'presentation'
+                    ? 'Vincular Presentación'
+                    : cloudLinkCategory === 'other'
+                    ? 'Vincular Enlace Web de Apoyo'
+                    : 'Vincular Documento en la Nube'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setCloudLinkCategory(null);
+                  setEditingResourceId(null);
+                  setEditingResourceTarget(null);
+                  setCloudLinkTitle('');
+                  setCloudLinkUrl('');
+                }}
+                className="text-white/80 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSaveCloudDocumentLink();
+              }}
+              className="p-5 space-y-3.5 text-xs"
+            >
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Tipo de Recurso:</label>
+                <select
+                  value={cloudLinkCategory}
+                  onChange={(e) => setCloudLinkCategory(e.target.value as DocCategory)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-semibold"
+                >
+                  <option value="document">📄 Documento (Google Docs / Word / PDF URL)</option>
+                  <option value="spreadsheet">📊 Hoja de Cálculo (Google Sheets / Excel / OneDrive)</option>
+                  <option value="presentation">📽️ Presentación (Google Slides / PowerPoint)</option>
+                  <option value="other">🔗 Enlace Web de Apoyo</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Título visible para el alumno: <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ej. Guía de Práctica 01 - Ley de Ohm"
+                  value={cloudLinkTitle}
+                  onChange={(e) => setCloudLinkTitle(e.target.value)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  URL del Documento / Hoja / Enlace: <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="url"
+                  required
+                  placeholder="https://docs.google.com/... o https://..."
+                  value={cloudLinkUrl}
+                  onChange={(e) => setCloudLinkUrl(e.target.value)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono"
+                />
+                <p className="text-[11px] text-slate-500 mt-1">
+                  No es necesario subir un archivo local si deseas usar un enlace web de Google Drive, Docs, Sheets, Slides, OneDrive o página web.
+                </p>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCloudLinkCategory(null);
+                    setEditingResourceId(null);
+                    setEditingResourceTarget(null);
+                    setCloudLinkTitle('');
+                    setCloudLinkUrl('');
+                  }}
+                  className="px-4 py-2 bg-slate-100 text-slate-700 font-semibold rounded-lg cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={!cloudLinkUrl.trim()}
+                  className="px-5 py-2 bg-[#4B3B8B] hover:bg-[#3B2D73] disabled:opacity-50 text-white font-bold rounded-lg cursor-pointer"
+                >
+                  {editingResourceId ? 'Guardar Cambios del Enlace' : 'Vincular a Lección'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Confirmación Segura en Plataforma (sin window.confirm) */}
+      {confirmDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden">
+            <div className="bg-rose-700 p-4 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Trash2 className="w-4 h-4 text-amber-200" />
+                <h3 className="text-sm font-bold">{confirmDialog.title}</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setConfirmDialog(null)}
+                className="text-white/80 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4 text-xs">
+              <p className="text-slate-700 leading-relaxed">{confirmDialog.message}</p>
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setConfirmDialog(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const action = confirmDialog.onConfirm;
+                    setConfirmDialog(null);
+                    action();
+                  }}
+                  className="px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white font-bold rounded-lg cursor-pointer"
+                >
+                  {confirmDialog.confirmLabel || 'Sí, Eliminar'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -1844,13 +2052,19 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          if (window.confirm('¿Deseas limpiar los materiales de práctica de esta lección?')) {
-                                            setAssignmentNotes('');
-                                            updateLesson(course.id, mod.id, les.id, {
-                                              assignment: undefined,
-                                            });
-                                            showToast('Materiales reiniciados.');
-                                          }
+                                          setConfirmDialog({
+                                            title: 'Limpiar Materiales de Práctica',
+                                            message:
+                                              '¿Deseas eliminar la tarea asignada de esta lección?',
+                                            confirmLabel: 'Sí, Limpiar',
+                                            onConfirm: () => {
+                                              setAssignmentNotes('');
+                                              updateLesson(course.id, mod.id, les.id, {
+                                                assignment: undefined,
+                                              });
+                                              showToast('Materiales reiniciados.');
+                                            },
+                                          });
                                         }}
                                         className="text-slate-500 hover:text-red-600 transition-colors cursor-pointer"
                                         title="Limpiar materiales"
@@ -1988,85 +2202,6 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
                                       </button>
                                     </div>
 
-                                    {/* Inline Cloud Link Form when adding OR editing an external link */}
-                                    {cloudLinkCategory && (
-                                      <div className="p-3.5 bg-white border border-[#CBB8E8] rounded-xl space-y-2.5 text-xs animate-in fade-in duration-150">
-                                        <div className="flex items-center justify-between">
-                                          <span className="font-bold text-[#4B3B8B]">
-                                            {editingResourceId
-                                              ? '✏️ Editar / Reemplazar Enlace Externo'
-                                              : cloudLinkCategory === 'spreadsheet'
-                                              ? '📊 Vincular Hoja de Cálculo (Google Sheets / Excel / OneDrive)'
-                                              : cloudLinkCategory === 'presentation'
-                                              ? '📽️ Vincular Presentación (Google Slides / PowerPoint / OneDrive)'
-                                              : cloudLinkCategory === 'other'
-                                              ? '🔗 Vincular Enlace Web de Apoyo'
-                                              : '📄 Vincular Documento (Google Docs / Word / OneDrive / PDF)'}
-                                          </span>
-                                          <button
-                                            type="button"
-                                            onClick={() => {
-                                              setCloudLinkCategory(null);
-                                              setEditingResourceId(null);
-                                              setCloudLinkTitle('');
-                                              setCloudLinkUrl('');
-                                            }}
-                                            className="text-slate-400 hover:text-slate-700 text-xs cursor-pointer"
-                                          >
-                                            ✕
-                                          </button>
-                                        </div>
-                                        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-                                          <select
-                                            value={cloudLinkCategory}
-                                            onChange={(e) => setCloudLinkCategory(e.target.value as DocCategory)}
-                                            className="p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-semibold"
-                                          >
-                                            <option value="document">📄 Documento</option>
-                                            <option value="spreadsheet">📊 Hoja de Cálculo</option>
-                                            <option value="presentation">📽️ Presentación</option>
-                                            <option value="other">🔗 Enlace Web</option>
-                                          </select>
-                                          <input
-                                            type="text"
-                                            placeholder="Título visible para el alumno..."
-                                            value={cloudLinkTitle}
-                                            onChange={(e) => setCloudLinkTitle(e.target.value)}
-                                            className="p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
-                                          />
-                                          <input
-                                            type="url"
-                                            placeholder="https://docs.google.com/... o URL web"
-                                            value={cloudLinkUrl}
-                                            onChange={(e) => setCloudLinkUrl(e.target.value)}
-                                            className="md:col-span-2 p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
-                                          />
-                                        </div>
-                                        <div className="flex justify-end gap-2">
-                                          <button
-                                            type="button"
-                                            onClick={() => {
-                                              setCloudLinkCategory(null);
-                                              setEditingResourceId(null);
-                                              setCloudLinkTitle('');
-                                              setCloudLinkUrl('');
-                                            }}
-                                            className="px-3 py-1.5 bg-slate-100 text-slate-700 rounded-lg font-semibold cursor-pointer"
-                                          >
-                                            Cancelar
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={handleSaveCloudDocumentLink}
-                                            disabled={!cloudLinkUrl.trim()}
-                                            className="px-4 py-1.5 bg-[#4B3B8B] hover:bg-[#3B2D73] disabled:opacity-50 text-white rounded-lg font-bold cursor-pointer"
-                                          >
-                                            {editingResourceId ? 'Guardar Cambios del Enlace' : 'Vincular a Lección'}
-                                          </button>
-                                        </div>
-                                      </div>
-                                    )}
-
                                     {/* Active Assignment Card */}
                                     {les.assignment && (
                                       <div className="p-3.5 bg-white border border-[#CBB8E8] rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
@@ -2110,11 +2245,18 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
                                           <button
                                             type="button"
                                             onClick={() => {
-                                              if (window.confirm(`¿Eliminar la tarea "${les.assignment?.title}"?`)) {
-                                                setAssignmentNotes('');
-                                                updateLesson(course.id, mod.id, les.id, { assignment: undefined });
-                                                showToast('Tarea eliminada de la lección.');
-                                              }
+                                              setConfirmDialog({
+                                                title: 'Eliminar Tarea Práctica',
+                                                message: `¿Confirmas eliminar la tarea "${les.assignment?.title}" de esta lección?`,
+                                                confirmLabel: 'Sí, Eliminar Tarea',
+                                                onConfirm: () => {
+                                                  setAssignmentNotes('');
+                                                  updateLesson(course.id, mod.id, les.id, {
+                                                    assignment: undefined,
+                                                  });
+                                                  showToast('Tarea eliminada de la lección.');
+                                                },
+                                              });
                                             }}
                                             className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer"
                                             title="Eliminar tarea"
@@ -2169,10 +2311,16 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
                                           <button
                                             type="button"
                                             onClick={() => {
-                                              if (window.confirm('¿Deseas eliminar este laboratorio/simulador de la lección?')) {
-                                                deleteSimulatorLab(course.id, mod.id, les.id);
-                                                showToast('Laboratorio/Simulador eliminado.');
-                                              }
+                                              setConfirmDialog({
+                                                title: 'Eliminar Simulador',
+                                                message:
+                                                  '¿Deseas eliminar este laboratorio/simulador de la lección?',
+                                                confirmLabel: 'Sí, Eliminar Simulador',
+                                                onConfirm: () => {
+                                                  deleteSimulatorLab(course.id, mod.id, les.id);
+                                                  showToast('Laboratorio/Simulador eliminado.');
+                                                },
+                                              });
                                             }}
                                             className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
                                             title="Eliminar laboratorio"
@@ -2286,7 +2434,7 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
                                                   {isExternalLink ? (
                                                     <button
                                                       type="button"
-                                                      onClick={() => openEditCloudLink(res)}
+                                                      onClick={() => openEditCloudLink(res, mod.id, les.id)}
                                                       className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 rounded text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer"
                                                       title="Editar o reemplazar enlace web sin subir archivo local"
                                                     >
@@ -2310,14 +2458,20 @@ Nunca energizar el circuito sin haber verificado la polaridad de los capacitores
                                                   <button
                                                     type="button"
                                                     onClick={() => {
-                                                      if (window.confirm(`¿Eliminar "${res.title}" de esta lección?`)) {
-                                                        deleteResource(course.id, mod.id, les.id, res.id);
-                                                        if (editingResourceId === res.id) {
-                                                          setEditingResourceId(null);
-                                                          setCloudLinkCategory(null);
-                                                        }
-                                                        showToast(`"${res.title}" eliminado.`);
-                                                      }
+                                                      setConfirmDialog({
+                                                        title: 'Eliminar Recurso / Enlace',
+                                                        message: `¿Confirmas eliminar "${res.title}" de esta lección?`,
+                                                        confirmLabel: 'Sí, Eliminar',
+                                                        onConfirm: () => {
+                                                          deleteResource(course.id, mod.id, les.id, res.id);
+                                                          if (editingResourceId === res.id) {
+                                                            setEditingResourceId(null);
+                                                            setEditingResourceTarget(null);
+                                                            setCloudLinkCategory(null);
+                                                          }
+                                                          showToast(`"${res.title}" eliminado.`);
+                                                        },
+                                                      });
                                                     }}
                                                     className="px-2 py-1 hover:bg-rose-50 text-slate-500 hover:text-rose-600 rounded transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-semibold"
                                                     title="Eliminar enlace o archivo"
