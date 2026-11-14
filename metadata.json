@@ -1,0 +1,8 @@
+{
+  "name": "Remix CFP AGAPE - Panel del Docente LMS",
+  "description": "Panel de Gestión y Configuración del Docente del Centro de Formación Profesional AGAPE. Creador de cursos, módulos, lecciones con video HD, materiales de práctica y evaluación.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
